@@ -19,10 +19,11 @@ class WeComOAuthControllerTest {
     @Test
     void startBindsBrowserWithHostOnlySecureCookieAndNoStore() throws Exception {
         WeComOAuthService service = mock(WeComOAuthService.class);
+        WeComBindingEnrollmentService enrollmentService = mock(WeComBindingEnrollmentService.class);
         when(service.start("#/tasks?view=mine&taskId=10000000-0000-0000-0000-000000000001"))
                 .thenReturn(new WeComOAuthService.Start(URI.create("https://open.weixin.qq.com/authorize"),
                         "browser-verifier", 600));
-        MockMvc mvc = MockMvcBuilders.standaloneSetup(new WeComOAuthController(service)).build();
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new WeComOAuthController(service, enrollmentService)).build();
 
         mvc.perform(get("/api/v1/integrations/wecom/oauth/start")
                         .param("returnTo", "#/tasks?view=mine&taskId=10000000-0000-0000-0000-000000000001"))
@@ -39,9 +40,10 @@ class WeComOAuthControllerTest {
     @Test
     void callbackRequiresAndClearsTheBrowserVerifier() throws Exception {
         WeComOAuthService service = mock(WeComOAuthService.class);
+        WeComBindingEnrollmentService enrollmentService = mock(WeComBindingEnrollmentService.class);
         when(service.callback("provider-code", "state", "browser-verifier"))
                 .thenReturn(URI.create("https://app.example.test/wecom-auth?exchange_code=once"));
-        MockMvc mvc = MockMvcBuilders.standaloneSetup(new WeComOAuthController(service)).build();
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new WeComOAuthController(service, enrollmentService)).build();
 
         mvc.perform(get("/api/v1/integrations/wecom/oauth/callback")
                         .param("code", "provider-code").param("state", "state")
@@ -54,5 +56,21 @@ class WeComOAuthControllerTest {
                         .param("code", "provider-code").param("state", "state"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
+    }
+
+    @Test
+    void callbackRoutesEnrollmentCookieToEnrollmentFlow() throws Exception {
+        WeComOAuthService service = mock(WeComOAuthService.class);
+        WeComBindingEnrollmentService enrollmentService = mock(WeComBindingEnrollmentService.class);
+        when(enrollmentService.callback("provider-code", "state", "binding-verifier"))
+                .thenReturn(URI.create("https://app.example.test/#/wecom-binding-result?status=pending"));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new WeComOAuthController(service, enrollmentService)).build();
+
+        mvc.perform(get("/api/v1/integrations/wecom/oauth/callback")
+                        .param("code", "provider-code").param("state", "state")
+                        .cookie(new Cookie(WeComOAuthController.BINDING_VERIFIER_COOKIE, "binding-verifier")))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", containsString("wecom-binding-result")));
+        verify(enrollmentService).callback("provider-code", "state", "binding-verifier");
     }
 }

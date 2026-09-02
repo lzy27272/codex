@@ -226,6 +226,18 @@ public class OrganizationService {
                 select id, code, name, job_family, level_code, status
                 from position_definition
                 where tenant_id = :tenantId
+                  and deleted_at is null and permanently_deleted_at is null
+                  and exists (
+                    select 1
+                    from position_function_profile profile
+                    join position_function_profile_version published
+                      on published.tenant_id = profile.tenant_id
+                     and published.profile_id = profile.id
+                     and published.lifecycle_status = 'PUBLISHED'
+                    where profile.tenant_id = position_definition.tenant_id
+                      and profile.position_id = position_definition.id
+                      and profile.scope_type = 'GROUP'
+                  )
                 order by job_family, level_code, name
                 """, base(principal));
     }
@@ -699,18 +711,42 @@ public class OrganizationService {
     public Map<String, Object> assignPosition(UUID employeeId, OrganizationModels.CreatePositionAssignment request) {
         accessPolicy.requirePermission("org.manage");
         TenantPrincipal principal = prepare();
+        if (request.validTo() != null && request.validTo().isBefore(request.validFrom())) {
+            throw new IllegalArgumentException("任职结束日期不能早于开始日期");
+        }
+        if (request.validTo() != null && request.validTo().isBefore(java.time.LocalDate.now())) {
+            throw new IllegalArgumentException("不能创建已经结束的有效任职");
+        }
         requireOrgType(principal, request.orgUnitId());
-        requireEntity("employee", principal, employeeId);
-        requireActiveEntity("employee", "employment_status", principal, employeeId, "员工已停用，不能分配任职");
-        requireActiveEntity("position_definition", "status", principal, request.positionId(), "岗位已停用，不能分配任职");
+        PositionRoleGrant positionGrant = lockActivePublishedPosition(principal, request.positionId());
+        requirePositionApplicableToOrganization(principal, request.positionId(), request.orgUnitId());
         accessPolicy.requireOrgScope(request.orgUnitId());
+        UUID accountId = lockActiveEmployeeAccount(principal, employeeId);
+
+        int previousPrimaryCount = 0;
+        if (Boolean.TRUE.equals(request.primary())) {
+            previousPrimaryCount = jdbc.update("""
+                    update employee_position_assignment
+                    set is_primary = false, updated_at = now()
+                    where tenant_id = :tenantId and employee_id = :employeeId
+                      and is_primary = true and status = 'ACTIVE'
+                    """, base(principal).addValue("employeeId", employeeId));
+        }
 
         UUID id = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
         MapSqlParameterSource parameters = base(principal)
                 .addValue("id", id)
                 .addValue("employeeId", employeeId)
                 .addValue("orgUnitId", request.orgUnitId())
                 .addValue("positionId", request.positionId())
+                .addValue("accountId", accountId)
+                .addValue("roleAssignmentId", roleAssignmentId)
+                .addValue("roleId", positionGrant.roleId())
+                .addValue("scopeType", positionGrant.scopeType())
+                .addValue("scopeOrgUnitId", Set.of("ORG_UNIT", "ORG_TREE").contains(positionGrant.scopeType())
+                        ? request.orgUnitId() : null)
+                .addValue("actorId", principal.actorId())
                 .addValue("managerAssignmentId", request.managerAssignmentId())
                 .addValue("primary", Boolean.TRUE.equals(request.primary()))
                 .addValue("assignmentType", request.assignmentType() == null ? "PERMANENT" : request.assignmentType().toUpperCase())
@@ -724,7 +760,24 @@ public class OrganizationService {
                     (:id, :tenantId, :employeeId, :orgUnitId, :positionId, :managerAssignmentId,
                      :primary, :assignmentType, :validFrom, :validTo)
                 """, parameters);
-        return Map.of("id", id, "employeeId", employeeId, "orgUnitId", request.orgUnitId(), "positionId", request.positionId());
+        jdbc.update("""
+                insert into role_assignment
+                    (id, tenant_id, account_id, role_id, scope_org_unit_id, scope_type,
+                     valid_from, valid_to, granted_by, source_type, source_assignment_id)
+                values
+                    (:roleAssignmentId, :tenantId, :accountId, :roleId, :scopeOrgUnitId, :scopeType,
+                     greatest(now(), cast(:validFrom as date)::timestamptz),
+                     case when cast(:validTo as date) is null then null
+                          else (cast(:validTo as date) + interval '1 day')::timestamptz end,
+                     :actorId, 'POSITION_ASSIGNMENT', :id)
+                """, parameters);
+        if (previousPrimaryCount > 0) {
+            auditWriter.record("POSITION_PRIMARY_ASSIGNMENT_SWITCHED", "EMPLOYEE", employeeId,
+                    "{\"previousPrimaryCount\":" + previousPrimaryCount
+                            + ",\"newAssignmentId\":\"" + id + "\"}");
+        }
+        return Map.of("id", id, "employeeId", employeeId, "orgUnitId", request.orgUnitId(),
+                "positionId", request.positionId(), "roleAssignmentId", roleAssignmentId);
     }
 
     private TenantPrincipal prepare() {
@@ -863,6 +916,106 @@ public class OrganizationService {
             throw new IllegalArgumentException(message);
         }
     }
+
+    private void requirePositionApplicableToOrganization(
+            TenantPrincipal principal,
+            UUID positionId,
+            UUID orgUnitId
+    ) {
+        Boolean applicable = jdbc.queryForObject("""
+                select exists (
+                    select 1
+                    from position_definition position
+                    left join lateral (
+                        select ancestor.id
+                        from org_unit_closure closure
+                        join org_unit ancestor
+                          on ancestor.tenant_id = closure.tenant_id
+                         and ancestor.id = closure.ancestor_id
+                        where closure.tenant_id = position.tenant_id
+                          and closure.descendant_id = :orgUnitId
+                          and ancestor.unit_type = 'HOTEL'
+                          and ancestor.status = 'ACTIVE'
+                        order by closure.depth
+                        limit 1
+                    ) hotel_context on true
+                    where position.tenant_id = :tenantId
+                      and position.id = :positionId
+                      and position.status = 'ACTIVE'
+                      and position.deleted_at is null
+                      and position.permanently_deleted_at is null
+                      and (
+                        position.applies_to_all_hotels = true
+                        or (
+                          hotel_context.id is not null
+                          and exists (
+                            select 1
+                            from position_applicable_hotel applicable_hotel
+                            where applicable_hotel.tenant_id = position.tenant_id
+                              and applicable_hotel.position_id = position.id
+                              and applicable_hotel.hotel_org_unit_id = hotel_context.id
+                          )
+                        )
+                      )
+                )
+                """, base(principal)
+                .addValue("positionId", positionId)
+                .addValue("orgUnitId", orgUnitId), Boolean.class);
+        if (!Boolean.TRUE.equals(applicable)) {
+            throw new IllegalArgumentException("该岗位不适用于任职所在门店，请先调整岗位适用门店");
+        }
+    }
+
+    /**
+     * Serializes assignment creation with applicability updates.  The caller
+     * must validate applicability only after acquiring this row lock, so an
+     * assignment cannot be inserted against a scope snapshot that has just
+     * been narrowed by another transaction.
+     */
+    private PositionRoleGrant lockActivePublishedPosition(TenantPrincipal principal, UUID positionId) {
+        List<PositionRoleGrant> rows = jdbc.query("""
+                select position.id, profile.default_role_id, published.authorization_scope_type
+                from position_definition position
+                join position_function_profile profile
+                  on profile.tenant_id = position.tenant_id
+                 and profile.position_id = position.id and profile.scope_type = 'GROUP'
+                join position_function_profile_version published
+                  on published.tenant_id = profile.tenant_id
+                 and published.profile_id = profile.id
+                 and published.lifecycle_status = 'PUBLISHED'
+                join app_role role
+                  on role.tenant_id = profile.tenant_id and role.id = profile.default_role_id
+                where position.tenant_id = :tenantId and position.id = :positionId
+                  and position.status = 'ACTIVE'
+                  and position.deleted_at is null and position.permanently_deleted_at is null
+                for update of position
+                """, base(principal).addValue("positionId", positionId),
+                (rs, rowNum) -> new PositionRoleGrant(
+                        rs.getObject("default_role_id", UUID.class),
+                        rs.getString("authorization_scope_type")));
+        if (rows.size() != 1) {
+            throw new IllegalArgumentException("岗位已停用或功能方案尚未发布，不能分配任职");
+        }
+        return rows.getFirst();
+    }
+
+    private UUID lockActiveEmployeeAccount(TenantPrincipal principal, UUID employeeId) {
+        List<UUID> rows = jdbc.query("""
+                select account_id
+                from employee
+                where tenant_id = :tenantId and id = :employeeId
+                  and employment_status = 'ACTIVE' and deleted_at is null
+                  and account_id is not null
+                for update
+                """, base(principal).addValue("employeeId", employeeId),
+                (rs, rowNum) -> rs.getObject("account_id", UUID.class));
+        if (rows.size() != 1) {
+            throw new IllegalArgumentException("员工已停用或尚未开通中台账号，不能分配任职");
+        }
+        return rows.getFirst();
+    }
+
+    private record PositionRoleGrant(UUID roleId, String scopeType) { }
 
     private void requireUniqueCode(
             String table,

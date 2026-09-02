@@ -51,11 +51,13 @@ function jsonColumn(raw: unknown): unknown {
 
 export async function loadIdentity(identity: ApiIdentity, fallback: IdentitySnapshot) {
   return withFallback(async () => {
-    const raw = object(await apiRequest<unknown>('/iam/me', identity))
+    // Bootstrap must not reuse the demo/default assignment. The server resolves
+    // the real account first and returns its valid assignments for selection.
+    const raw = object(await apiRequest<unknown>('/iam/me', { ...identity, assignmentId: undefined }))
     const account = object(raw.account)
     const employee = object(raw.employee)
     const assignments = asList<JsonObject>(value(raw, 'positionAssignments', 'assignments'))
-    return {
+    const snapshot: IdentitySnapshot = {
       accountId: text(account, ['id'], identity.actorId),
       displayName: text(account, ['displayName', 'display_name'], '当前用户'),
       employeeId: text(employee, ['id'], '') || undefined,
@@ -65,14 +67,20 @@ export async function loadIdentity(identity: ApiIdentity, fallback: IdentitySnap
       permissions: asList<string>(raw.permissions),
       tenantScope: Boolean(value(raw, 'tenantScope', 'tenant_scope')),
       orgScopes: asList<string>(value(raw, 'organizationScopes', 'orgScopes')),
-      assignments: assignments.map((item) => ({
-        id: text(item, ['id']), orgUnitId: text(item, ['organizationId', 'orgUnitId', 'org_unit_id']),
-        orgName: text(item, ['organizationName', 'orgName', 'org_name']), positionId: text(item, ['positionId', 'position_id']),
-        positionCode: text(item, ['positionCode', 'position_code']), positionName: text(item, ['positionName', 'position_name']),
-        primary: Boolean(value(item, 'primary', 'isPrimary', 'is_primary')),
-        assignmentType: text(item, ['assignmentType', 'assignment_type'], 'PERMANENT'),
-      })),
-    } satisfies IdentitySnapshot
+      assignments: assignments.map((item) => {
+        const rawPermissionCodes = value(item, 'permissionCodes', 'permission_codes')
+        return {
+          id: text(item, ['id']), orgUnitId: text(item, ['organizationId', 'orgUnitId', 'org_unit_id']),
+          orgName: text(item, ['organizationName', 'orgName', 'org_name']), positionId: text(item, ['positionId', 'position_id']),
+          positionCode: text(item, ['positionCode', 'position_code']), positionName: text(item, ['positionName', 'position_name']),
+          primary: Boolean(value(item, 'primary', 'isPrimary', 'is_primary')),
+          assignmentType: text(item, ['assignmentType', 'assignment_type'], 'PERMANENT'),
+          ...(rawPermissionCodes === undefined ? {} : { permissionCodes: asList<string>(rawPermissionCodes) }),
+          authorizationScopeType: text(item, ['authorizationScopeType', 'authorization_scope_type'], '') as IdentitySnapshot['assignments'][number]['authorizationScopeType'] || undefined,
+        }
+      }),
+    }
+    return snapshot
   }, fallback)
 }
 

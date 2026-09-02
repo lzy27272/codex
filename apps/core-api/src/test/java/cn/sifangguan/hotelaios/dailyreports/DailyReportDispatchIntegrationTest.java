@@ -163,6 +163,17 @@ class DailyReportDispatchIntegrationTest {
                 where tenant_id = ? and business_date = ?
                   and event_type = 'DAILY_REPORT_DUE_SOON'
                 """, TENANT, BUSINESS_DATE)).isEqualTo(4);
+        assertThat(count("""
+                select count(*)
+                from notification notification
+                join daily_report report
+                  on report.tenant_id = notification.tenant_id
+                 and report.id = notification.source_id
+                where notification.tenant_id = ?
+                  and report.business_date = ?
+                  and notification.source_type = 'DAILY_REPORT'
+                  and notification.notification_type = 'DAILY_REPORT_DUE_SOON'
+                """, TENANT, BUSINESS_DATE)).isEqualTo(4);
         assertNoReminderEvents(submittedReportId);
         assertNoReminderEvents(mismatchedReportId);
 
@@ -178,6 +189,17 @@ class DailyReportDispatchIntegrationTest {
                 select count(*) from outbox_event
                 where tenant_id = ? and business_date = ?
                   and event_type = 'DAILY_REPORT_OVERDUE'
+                """, TENANT, BUSINESS_DATE)).isEqualTo(4);
+        assertThat(count("""
+                select count(*)
+                from notification notification
+                join daily_report report
+                  on report.tenant_id = notification.tenant_id
+                 and report.id = notification.source_id
+                where notification.tenant_id = ?
+                  and report.business_date = ?
+                  and notification.source_type = 'DAILY_REPORT'
+                  and notification.notification_type = 'DAILY_REPORT_OVERDUE'
                 """, TENANT, BUSINESS_DATE)).isEqualTo(4);
         assertNoReminderEvents(submittedReportId);
         assertNoReminderEvents(mismatchedReportId);

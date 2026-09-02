@@ -21,9 +21,16 @@ import java.net.URI;
 @ConditionalOnProperty(name = {"app.wecom.enabled", "app.security.local-login.enabled"}, havingValue = "true")
 public class WeComOAuthController {
     static final String VERIFIER_COOKIE = "__Host-wecom_oauth_verifier";
+    static final String BINDING_VERIFIER_COOKIE = "__Host-wecom_binding_verifier";
     private final WeComOAuthService service;
+    private final WeComBindingEnrollmentService enrollmentService;
 
-    public WeComOAuthController(WeComOAuthService service) { this.service = service; }
+    public WeComOAuthController(
+            WeComOAuthService service, WeComBindingEnrollmentService enrollmentService
+    ) {
+        this.service = service;
+        this.enrollmentService = enrollmentService;
+    }
 
     @GetMapping("/start")
     public ResponseEntity<Void> start(@RequestParam(required = false) String returnTo) {
@@ -38,17 +45,27 @@ public class WeComOAuthController {
     public ResponseEntity<Void> callback(
             @RequestParam String code,
             @RequestParam String state,
-            @CookieValue(name = VERIFIER_COOKIE, required = false) String browserVerifier
+            @CookieValue(name = VERIFIER_COOKIE, required = false) String browserVerifier,
+            @CookieValue(name = BINDING_VERIFIER_COOKIE, required = false) String bindingBrowserVerifier
     ) {
         try {
-            URI location = service.callback(code, state, browserVerifier);
+            boolean taskFlow = browserVerifier != null && !browserVerifier.isBlank();
+            boolean bindingFlow = bindingBrowserVerifier != null && !bindingBrowserVerifier.isBlank();
+            if (taskFlow == bindingFlow) {
+                throw new IllegalArgumentException("企业微信OAuth浏览器状态无效");
+            }
+            URI location = taskFlow
+                    ? service.callback(code, state, browserVerifier)
+                    : enrollmentService.callback(code, state, bindingBrowserVerifier);
             return noStore(ResponseEntity.status(HttpStatus.FOUND))
                     .header(HttpHeaders.LOCATION, location.toString())
-                    .header(HttpHeaders.SET_COOKIE, clearVerifierCookie().toString())
+                    .header(HttpHeaders.SET_COOKIE, clearVerifierCookie(VERIFIER_COOKIE).toString())
+                    .header(HttpHeaders.SET_COOKIE, clearVerifierCookie(BINDING_VERIFIER_COOKIE).toString())
                     .build();
         } catch (RuntimeException exception) {
             return noStore(ResponseEntity.status(HttpStatus.UNAUTHORIZED))
-                    .header(HttpHeaders.SET_COOKIE, clearVerifierCookie().toString())
+                    .header(HttpHeaders.SET_COOKIE, clearVerifierCookie(VERIFIER_COOKIE).toString())
+                    .header(HttpHeaders.SET_COOKIE, clearVerifierCookie(BINDING_VERIFIER_COOKIE).toString())
                     .build();
         }
     }
@@ -66,8 +83,8 @@ public class WeComOAuthController {
                 .maxAge(maxAgeSeconds).build();
     }
 
-    private static ResponseCookie clearVerifierCookie() {
-        return ResponseCookie.from(VERIFIER_COOKIE, "")
+    private static ResponseCookie clearVerifierCookie(String name) {
+        return ResponseCookie.from(name, "")
                 .httpOnly(true).secure(true).sameSite("Lax").path("/")
                 .maxAge(0).build();
     }

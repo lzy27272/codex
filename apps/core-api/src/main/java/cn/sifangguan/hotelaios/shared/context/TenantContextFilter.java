@@ -2,11 +2,13 @@ package cn.sifangguan.hotelaios.shared.context;
 
 import cn.sifangguan.hotelaios.shared.security.EffectiveIdentityService;
 import cn.sifangguan.hotelaios.shared.security.IdentityAuthenticationException;
+import cn.sifangguan.hotelaios.integrations.wecom.WeComSessionBindingGuard;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -26,6 +28,7 @@ import java.util.stream.Collectors;
 public class TenantContextFilter extends OncePerRequestFilter {
     private final boolean developmentHeaderAuthEnabled;
     private final EffectiveIdentityService identityService;
+    private final ObjectProvider<WeComSessionBindingGuard> weComSessionBindingGuard;
     private final String tenantIdClaim;
     private final String accountIdClaim;
     private final boolean legacyUnitMode;
@@ -35,10 +38,12 @@ public class TenantContextFilter extends OncePerRequestFilter {
             @Value("${app.security.development-header-auth-enabled:false}") boolean developmentHeaderAuthEnabled,
             @Value("${app.security.jwt.tenant-id-claim:tenant_id}") String tenantIdClaim,
             @Value("${app.security.jwt.account-id-claim:account_id}") String accountIdClaim,
-            EffectiveIdentityService identityService
+            EffectiveIdentityService identityService,
+            ObjectProvider<WeComSessionBindingGuard> weComSessionBindingGuard
     ) {
         this.developmentHeaderAuthEnabled = developmentHeaderAuthEnabled;
         this.identityService = identityService;
+        this.weComSessionBindingGuard = weComSessionBindingGuard;
         this.tenantIdClaim = tenantIdClaim;
         this.accountIdClaim = accountIdClaim;
         this.legacyUnitMode = false;
@@ -48,6 +53,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
     public TenantContextFilter(boolean developmentHeaderAuthEnabled) {
         this.developmentHeaderAuthEnabled = developmentHeaderAuthEnabled;
         this.identityService = null;
+        this.weComSessionBindingGuard = null;
         this.tenantIdClaim = "tenant_id";
         this.accountIdClaim = "account_id";
         this.legacyUnitMode = true;
@@ -66,12 +72,24 @@ public class TenantContextFilter extends OncePerRequestFilter {
         if (path.equals("/api/v1/integrations/wecom/bot/callback")) {
             return HttpMethod.GET.matches(request.getMethod()) || HttpMethod.POST.matches(request.getMethod());
         }
+        if (path.equals("/api/v1/integrations/wecom/directory/callback")) {
+            return HttpMethod.GET.matches(request.getMethod()) || HttpMethod.POST.matches(request.getMethod());
+        }
         if (HttpMethod.GET.matches(request.getMethod())) {
             return path.equals("/api/v1/integrations/wecom/oauth/start")
-                    || path.equals("/api/v1/integrations/wecom/oauth/callback");
+                    || path.equals("/api/v1/integrations/wecom/oauth/callback")
+                    || path.equals("/api/v1/integrations/wecom/directory-onboarding/oauth/callback");
         }
-        return HttpMethod.POST.matches(request.getMethod())
-                && path.equals("/api/v1/integrations/wecom/oauth/exchange");
+        if (!HttpMethod.POST.matches(request.getMethod())) {
+            return false;
+        }
+        return path.equals("/api/v1/integrations/wecom/oauth/exchange")
+                || path.equals("/api/v1/integrations/wecom/binding-enrollment/preview")
+                || path.equals("/api/v1/integrations/wecom/binding-enrollment/start")
+                || path.equals("/api/v1/integrations/wecom/directory-onboarding/start")
+                || path.equals("/api/v1/integrations/wecom/directory-onboarding/exchange")
+                || path.equals("/api/v1/integrations/wecom/directory-onboarding/context")
+                || path.equals("/api/v1/integrations/wecom/directory-onboarding/submit");
     }
 
     @Override
@@ -84,7 +102,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
             UUID correlationId = optionalUuid(request.getHeader("X-Correlation-Id"), UUID.randomUUID());
             TenantPrincipal principal = developmentHeaderAuthEnabled
                     ? resolveDevelopmentIdentity(request, correlationId)
-                    : resolveJwtIdentity(correlationId);
+                    : resolveJwtIdentity(request, correlationId);
 
             TenantContext.set(principal);
             response.setHeader("X-Correlation-Id", correlationId.toString());
@@ -102,7 +120,12 @@ public class TenantContextFilter extends OncePerRequestFilter {
         UUID tenantId = requiredUuid(request, "X-Tenant-Id");
         UUID actorId = requiredUuid(request, "X-Actor-Id");
         if (!legacyUnitMode) {
-            return identityService.resolve(tenantId, actorId, correlationId);
+            return identityService.resolve(
+                    tenantId,
+                    actorId,
+                    correlationId,
+                    optionalAssignmentUuid(request.getHeader("X-Assignment-Id"))
+            );
         }
 
         String roleCode = requiredHeader(request, "X-Role-Code").trim().toUpperCase();
@@ -110,10 +133,11 @@ public class TenantContextFilter extends OncePerRequestFilter {
         return new TenantPrincipal(tenantId, actorId, roleCode, scopes, correlationId);
     }
 
-    private TenantPrincipal resolveJwtIdentity(UUID correlationId) {
+    private TenantPrincipal resolveJwtIdentity(HttpServletRequest request, UUID correlationId) {
         if (legacyUnitMode) {
             throw new IdentityAuthenticationException("开发请求头认证已关闭");
         }
+        UUID requestedAssignmentId = optionalAssignmentUuid(request.getHeader("X-Assignment-Id"));
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication)
                 || !authentication.isAuthenticated()) {
@@ -128,10 +152,23 @@ public class TenantContextFilter extends OncePerRequestFilter {
             throw new IdentityAuthenticationException("JWT缺少租户或账号标识");
         }
         try {
+            UUID tenantId = UUID.fromString(tenantClaim.toString());
+            UUID accountId = UUID.fromString(accountClaim.toString());
+            if ("wecom".equals(jwtAuthentication.getToken().getClaimAsString("auth_source"))) {
+                Number version = jwtAuthentication.getToken().getClaim("wecom_binding_version");
+                WeComSessionBindingGuard guard = weComSessionBindingGuard == null
+                        ? null : weComSessionBindingGuard.getIfAvailable();
+                if (version == null || guard == null) {
+                    throw new IdentityAuthenticationException(
+                            "企业微信会话缺少绑定状态，请重新验证");
+                }
+                guard.requireActive(tenantId, accountId, version.longValue());
+            }
             return identityService.resolve(
-                    UUID.fromString(tenantClaim.toString()),
-                    UUID.fromString(accountClaim.toString()),
-                    correlationId
+                    tenantId,
+                    accountId,
+                    correlationId,
+                    requestedAssignmentId
             );
         } catch (IllegalArgumentException exception) {
             throw new IdentityAuthenticationException("JWT租户或账号标识不是有效UUID");
@@ -152,6 +189,15 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
     private UUID optionalUuid(String value, UUID fallback) {
         return value == null || value.isBlank() ? fallback : UUID.fromString(value);
+    }
+
+    private UUID optionalAssignmentUuid(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("X-Assignment-Id不是有效UUID", exception);
+        }
     }
 
     private Set<UUID> parseScopes(String value) {

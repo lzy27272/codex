@@ -137,14 +137,16 @@ class SignedJwtIdentityLifecycleIntegrationTest {
 
         mockMvc.perform(get("/api/v1/business-days/current")
                         .param("orgUnitId", HANGZHOU_HOTEL)
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Assignment-Id", FRONT_OFFICE_SECONDARY_ASSIGNMENT))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.hotelOrgUnitId").value(HANGZHOU_HOTEL))
                 .andExpect(jsonPath("$.orgUnitId").value(HANGZHOU_HOTEL));
 
         mockMvc.perform(get("/api/v1/business-days/current")
                         .param("orgUnitId", SHANGHAI_HOTEL)
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Assignment-Id", FRONT_OFFICE_SECONDARY_ASSIGNMENT))
                 .andExpect(status().isForbidden());
     }
 
@@ -153,6 +155,17 @@ class SignedJwtIdentityLifecycleIntegrationTest {
         String token = OIDC.sign(CEO);
         assertStillUnexpired(token);
         getMe(token, 200);
+    }
+
+    @Test
+    void malformedAssignmentHeaderIsRejectedWithoutMisreportingJwtClaims() throws Exception {
+        String token = OIDC.sign(FRONT_DESK);
+
+        mockMvc.perform(get("/api/v1/iam/me")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Assignment-Id", "not-a-uuid"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("X-Assignment-Id不是有效UUID"));
     }
 
     private void getMe(String token, int expectedStatus) throws Exception {

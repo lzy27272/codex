@@ -8,7 +8,7 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
-@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"app.wecom.enabled", "app.wecom.bot.actions-enabled"}, havingValue = "true")
 public class WeComCallbackService {
     private static final Set<String> TASK_CARD_EVENTS = Set.of("TEMPLATE_CARD_EVENT");
 

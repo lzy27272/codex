@@ -10,7 +10,7 @@ import org.springframework.stereotype.Service;
 import java.util.UUID;
 
 @Service
-@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"app.wecom.enabled", "app.wecom.bot.actions-enabled"}, havingValue = "true")
 public class WeComCallbackProcessor {
     private static final Logger log = LoggerFactory.getLogger(WeComCallbackProcessor.class);
     private final WeComInboundReceiptService receipts;

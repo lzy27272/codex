@@ -21,6 +21,7 @@ public class WeComProperties {
     private final String callbackAesKey;
     private final String botId;
     private final String botReceiveId;
+    private final boolean botActionsEnabled;
     private final URI frontendBaseUrl;
     private final URI oauthCallbackUrl;
     private final Duration stateTtl;
@@ -37,6 +38,7 @@ public class WeComProperties {
             @Value("${app.wecom.callback-aes-key:}") String callbackAesKey,
             @Value("${app.wecom.bot-id:}") String botId,
             @Value("${app.wecom.bot-receive-id:}") String botReceiveId,
+            @Value("${app.wecom.bot.actions-enabled:false}") boolean botActionsEnabled,
             @Value("${app.wecom.frontend-base-url:http://localhost:5173}") String frontendBaseUrl,
             @Value("${app.wecom.oauth-callback-url:}") String oauthCallbackUrl,
             @Value("${app.wecom.oauth.state-ttl-minutes:10}") long stateTtlMinutes,
@@ -48,10 +50,11 @@ public class WeComProperties {
         this.corpId = required(corpId, "WECOM_CORP_ID");
         this.agentId = parsePositiveLong(agentId, "WECOM_AGENT_ID");
         this.corpSecret = required(corpSecret, "WECOM_CORP_SECRET");
-        this.callbackToken = required(callbackToken, "WECOM_CALLBACK_TOKEN");
-        this.callbackAesKey = required(callbackAesKey, "WECOM_CALLBACK_AES_KEY");
-        this.botId = required(botId, "WECOM_BOT_ID");
-        this.botReceiveId = required(botReceiveId, "WECOM_BOT_RECEIVE_ID");
+        this.botActionsEnabled = botActionsEnabled;
+        this.callbackToken = botActionsEnabled ? required(callbackToken, "WECOM_CALLBACK_TOKEN") : optional(callbackToken);
+        this.callbackAesKey = botActionsEnabled ? required(callbackAesKey, "WECOM_CALLBACK_AES_KEY") : optional(callbackAesKey);
+        this.botId = botActionsEnabled ? required(botId, "WECOM_BOT_ID") : optional(botId);
+        this.botReceiveId = botActionsEnabled ? required(botReceiveId, "WECOM_BOT_RECEIVE_ID") : optional(botReceiveId);
         this.frontendBaseUrl = URI.create(required(frontendBaseUrl, "WECOM_FRONTEND_BASE_URL"));
         this.oauthCallbackUrl = URI.create(required(oauthCallbackUrl, "WECOM_OAUTH_CALLBACK_URL"));
         this.stateTtl = Duration.ofMinutes(bounded(stateTtlMinutes, 1, 30, "state TTL"));
@@ -62,7 +65,7 @@ public class WeComProperties {
 
     @PostConstruct
     void validate() {
-        if (callbackAesKey.length() != 43) {
+        if (botActionsEnabled && callbackAesKey.length() != 43) {
             throw new IllegalStateException("WECOM_CALLBACK_AES_KEY must contain exactly 43 Base64 characters");
         }
         if (!"https".equalsIgnoreCase(frontendBaseUrl.getScheme())
@@ -89,6 +92,7 @@ public class WeComProperties {
     public String callbackAesKey() { return callbackAesKey; }
     public String botId() { return botId; }
     public String botReceiveId() { return botReceiveId; }
+    public boolean botActionsEnabled() { return botActionsEnabled; }
     public URI frontendBaseUrl() { return frontendBaseUrl; }
     public URI oauthCallbackUrl() { return oauthCallbackUrl; }
     public Duration stateTtl() { return stateTtl; }
@@ -107,6 +111,10 @@ public class WeComProperties {
     private static String required(String value, String name) {
         if (value == null || value.isBlank()) throw new IllegalStateException(name + " is required when WeCom is enabled");
         return value.trim();
+    }
+
+    private static String optional(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static long bounded(long value, long min, long max, String label) {

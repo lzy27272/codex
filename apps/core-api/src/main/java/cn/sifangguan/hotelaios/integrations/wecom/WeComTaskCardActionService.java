@@ -24,7 +24,7 @@ import java.util.UUID;
  * is trusted.
  */
 @Service
-@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"app.wecom.enabled", "app.wecom.bot.actions-enabled"}, havingValue = "true")
 public class WeComTaskCardActionService {
     private final NamedParameterJdbcTemplate jdbc;
     private final TenantDatabaseContext databaseContext;

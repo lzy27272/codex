@@ -47,7 +47,7 @@ class PmsMonthlyKpiReaderTest {
                   {"sourceHotelId":"h1","collectedAt":"2026-08-13T00:00:00Z","officialScoreEligible":true,
                    "period":{"from":"2026-07-01","to":"2026-07-31","expectedDayCount":31,"validDistinctDayCount":31,"missingDates":[],"duplicateDates":[]},
                    "metrics":{"occupancyRate":0.9897},
-                   "validation":{"coverageState":"PASS","numericState":"PASS","aggregateCrosscheckState":"PASS","hourlyRoomExclusionState":"VERIFIED_DIRECT_OVERNIGHT_OCCUPANCY","accuracyState":"NUMERICALLY_VALIDATED"}}
+                   "validation":{"coverageState":"PASS","numericState":"PASS","aggregateCrosscheckState":"PASS","denominatorSource":"PMS_DIRECT_OVERNIGHT_OCCUPANCY","hourlyRoomExclusionState":"VERIFIED_DIRECT_OVERNIGHT_OCCUPANCY","accuracyState":"NUMERICALLY_VALIDATED"}}
                 ]}
                 """);
 
@@ -59,5 +59,30 @@ class PmsMonthlyKpiReaderTest {
         assertThat(value.orElseThrow().hourlyRoomExclusionState())
                 .isEqualTo("VERIFIED_DIRECT_OVERNIGHT_OCCUPANCY");
         assertThat(value.orElseThrow().officialScoreEligible()).isTrue();
+        assertThat(value.orElseThrow().officialOccupancyEligible()).isTrue();
+    }
+
+    @Test
+    void acceptsValidatedLuopanDailyOvernightOccupancyAsOfficialScoreEvidence() throws Exception {
+        Path file = tempDir.resolve("monthly-luopan.json");
+        Files.writeString(file, """
+                {"records":[
+                  {"sourceHotelId":"h009","collectedAt":"2026-08-18T15:36:12Z","officialScoreEligible":true,
+                   "period":{"from":"2026-07-01","to":"2026-07-31","expectedDayCount":31,"validDistinctDayCount":31,"missingDates":[],"duplicateDates":[]},
+                   "metrics":{"overnightSoldRoomNights":2196,"effectiveSellableRoomNights":2201,"occupancyRate":0.99772831},
+                   "validation":{"coverageState":"PASS","numericState":"PASS","aggregateCrosscheckState":"PASS",
+                     "denominatorSource":"PMS_DIRECT_OVERNIGHT_OCCUPANCY_WITH_SEPARATE_HOURLY_COLUMNS",
+                     "hourlyRoomExclusionState":"VERIFIED_SEPARATE_OVERNIGHT_RATE_ALL_DAY_AND_HOURLY_COLUMNS",
+                     "accuracyState":"NUMERICALLY_AND_DEFINITION_VALIDATED",
+                     "capacityEvidence":{"state":"FULL_MONTH_VARIABLE_DAILY_CAPACITY","roomCapacity":null}}}
+                ]}
+                """);
+
+        var value = new PmsMonthlyKpiReader(new ObjectMapper()).latest(
+                file, "h009", LocalDate.parse("2026-07-01"), LocalDate.parse("2026-07-31"));
+
+        assertThat(value).isPresent();
+        assertThat(value.orElseThrow().occupancyRate()).isEqualByComparingTo("0.99772831");
+        assertThat(value.orElseThrow().officialOccupancyEligible()).isTrue();
     }
 }

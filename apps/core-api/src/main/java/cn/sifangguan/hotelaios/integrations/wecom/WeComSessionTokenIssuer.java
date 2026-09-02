@@ -20,22 +20,26 @@ import java.util.UUID;
 public class WeComSessionTokenIssuer {
     private final JwtEncoder jwtEncoder;
     private final WeComProperties properties;
+    private final WeComSessionBindingGuard bindingGuard;
     private final String issuer;
     private final String audience;
 
     public WeComSessionTokenIssuer(
             JwtEncoder jwtEncoder,
             WeComProperties properties,
+            WeComSessionBindingGuard bindingGuard,
             @Value("${app.security.local-login.issuer:hotel-ai-os-pilot}") String issuer,
             @Value("${app.security.jwt.audience:hotel-ai-os-api}") String audience
     ) {
         this.jwtEncoder = jwtEncoder;
         this.properties = properties;
+        this.bindingGuard = bindingGuard;
         this.issuer = issuer;
         this.audience = audience;
     }
 
     public Session issue(UUID tenantId, UUID accountId) {
+        long bindingVersion = bindingGuard.currentVersion(tenantId, accountId);
         Instant issuedAt = Instant.now();
         Instant expiresAt = issuedAt.plus(properties.sessionTtl());
         JwtClaimsSet claims = JwtClaimsSet.builder()
@@ -44,6 +48,7 @@ public class WeComSessionTokenIssuer {
                 .claim("tenant_id", tenantId.toString())
                 .claim("account_id", accountId.toString())
                 .claim("auth_source", "wecom")
+                .claim("wecom_binding_version", bindingVersion)
                 .build();
         String token = jwtEncoder.encode(JwtEncoderParameters.from(
                 JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();

@@ -42,34 +42,14 @@ public class OrganizationController {
         service.deleteOrgUnit(orgUnitId);
     }
 
-    @GetMapping("/positions")
-    public List<Map<String, Object>> positions() {
-        return service.listPositions();
-    }
-
-    @PostMapping("/positions")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createPosition(@Valid @RequestBody OrganizationModels.CreatePosition request) {
-        return service.createPosition(request);
-    }
-
-    @PutMapping("/positions/{positionId}")
-    public Map<String, Object> updatePosition(
-            @PathVariable UUID positionId,
-            @Valid @RequestBody OrganizationModels.UpdatePosition request
-    ) {
-        return service.updatePosition(positionId, request);
-    }
-
-    @DeleteMapping("/positions/{positionId}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deletePosition(@PathVariable UUID positionId) {
-        service.deletePosition(positionId);
-    }
-
     @GetMapping("/employees")
     public List<Map<String, Object>> employees() {
         return service.listEmployees();
+    }
+
+    @GetMapping("/position-options")
+    public List<Map<String, Object>> positionOptions() {
+        return service.listPositions();
     }
 
     @GetMapping("/employees/deleted")

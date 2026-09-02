@@ -19,14 +19,24 @@ test('企微回调只读取 exchange_code 并立即清除地址栏凭证', () =>
   assert.equal(replaced, '/wecom-auth')
 })
 
-test('任务深链只允许站内 tasks 路由和有效 UUID', () => {
+test('企微深链允许工作台、站内任务及日报详情，并要求安全目标', () => {
   globalThis.window = { location: { origin: 'https://www.sfgzt.cn' } }
   assert.equal(
     safeTaskDeepLink('#/tasks?view=mine&taskId=123e4567-e89b-42d3-a456-426614174000'),
     '#/tasks?view=mine&taskId=123e4567-e89b-42d3-a456-426614174000',
   )
+  assert.equal(
+    safeTaskDeepLink('#/daily-reports/123e4567-e89b-42d3-a456-426614174000'),
+    '#/daily-reports/123e4567-e89b-42d3-a456-426614174000',
+  )
+  assert.equal(safeTaskDeepLink('#/workbench'), '#/workbench')
   assert.throws(() => safeTaskDeepLink('https://evil.example/tasks?taskId=123e4567-e89b-42d3-a456-426614174000'))
   assert.throws(() => safeTaskDeepLink('#/notifications?taskId=123e4567-e89b-42d3-a456-426614174000'))
+  assert.throws(() => safeTaskDeepLink('#/daily-reports/not-a-uuid'))
+  assert.throws(() => safeTaskDeepLink('#/daily-reports/123e4567-e89b-42d3-a456-426614174000?next=https://evil.example'))
+  assert.throws(() => safeTaskDeepLink('#/daily-reports/123e4567-e89b-42d3-a456-426614174000/extra'))
+  assert.throws(() => safeTaskDeepLink('#/daily-reports/123e4567-e89b-42d3-a456-426614174000#extra'))
+  assert.throws(() => safeTaskDeepLink('#/workbench?next=/admin'))
 })
 
 test('完成和取消都回到应用根路径，不保留 wecom-auth pathname', () => {

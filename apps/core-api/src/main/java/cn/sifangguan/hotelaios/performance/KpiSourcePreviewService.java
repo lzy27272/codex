@@ -79,7 +79,7 @@ public class KpiSourcePreviewService {
         List<OtaKpiSnapshotReader.SourceHotel> hotels = sourceHotels();
         List<Map<String, Object>> hotelItems = hotels.stream().map(this::hotelItem).toList();
         int suggested = (int) indicators.stream().filter(item -> resolve(item.name()).kind() != BindingKind.MANUAL).count();
-        int currentlyAvailable = hotels.stream().mapToInt(hotel -> hotel.snapshots().isEmpty() ? 0
+        int currentlyAvailable = hotels.stream().mapToInt(hotel -> !hasConfiguredCalculationSource(hotel) ? 0
                 : (int) indicators.stream().filter(item -> resolve(item.name()).kind() == BindingKind.OCCUPANCY).count()).max().orElse(0);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("templateVersionId", templateVersionId);
@@ -237,12 +237,7 @@ public class KpiSourcePreviewService {
                     .filter(item -> within(item.businessDate(), sourceFrom, sourceTo)).toList())
                 : SourceAggregate.from(monthly);
         boolean candidateEligible = monthly != null && monthly.candidateEligible();
-        boolean officialEligible = monthly != null
-                && monthly.candidateEligible()
-                && monthly.officialScoreEligible()
-                && "PMS_DIRECT_OVERNIGHT_OCCUPANCY".equals(monthly.denominatorSource())
-                && "VERIFIED_DIRECT_OVERNIGHT_OCCUPANCY".equals(monthly.hourlyRoomExclusionState())
-                && "NUMERICALLY_VALIDATED".equals(monthly.accuracyState());
+        boolean officialEligible = monthly != null && monthly.officialOccupancyEligible();
 
         List<Map<String, Object>> indicatorResults = new ArrayList<>();
         BigDecimal automaticScore = BigDecimal.ZERO;
@@ -291,7 +286,9 @@ public class KpiSourcePreviewService {
                     item.put("state", "PENDING_VERIFICATION");
                     item.put("reason", monthly == null
                             ? "未取得该门店完整上一个自然月的PMS脱敏月度汇总"
-                            : "上月数据未通过完整性、重复、数值或月合计交叉校验，暂不计分");
+                            : "ZERO_RATE_REQUIRES_VALIDATION".equals(monthly.accuracyState())
+                                ? "PMS月报返回0且无有效经营分母，本月不计出租率得分，也不按0分处理"
+                                : "上月数据未通过完整性、重复、数值或月合计交叉校验，暂不计分");
                     pending++;
                 } else {
                     KpiImportedTierEvaluator.Evaluation evaluation = tierEvaluator.evaluate(
@@ -299,6 +296,12 @@ public class KpiSourcePreviewService {
                     if (officialEligible && "VERIFIED_DIRECT_OVERNIGHT_OCCUPANCY".equals(monthly.hourlyRoomExclusionState())) {
                         item.put("evidence", "美团PMS《JY07经理报表(月报)(固化)》直出“过夜房出租率”："
                                 + formatPercent(actual) + "（不计钟点房）");
+                    } else if (officialEligible && "VERIFIED_SEPARATE_OVERNIGHT_RATE_ALL_DAY_AND_HOURLY_COLUMNS"
+                            .equals(monthly.hourlyRoomExclusionState())) {
+                        item.put("evidence", "罗盘云《酒店出租收入按日统计时间段报表》直出“过夜出租率”："
+                                + formatPercent(actual) + "；全天房" + plain(aggregate.roomNights())
+                                + " ÷ 有效可售房晚" + plain(aggregate.sellableRooms())
+                                + "，钟点房及钟点房费按独立列剔除");
                     } else {
                         item.put("evidence", aggregate.businessDays() + "个营业日：出租房晚"
                                 + plain(aggregate.roomNights()) + " ÷ 有效可售房晚"
@@ -373,11 +376,21 @@ public class KpiSourcePreviewService {
         result.put("indicators", indicatorResults);
         List<String> warnings = new ArrayList<>();
         warnings.add("考核月" + assessmentMonth + "固定读取上一个自然月" + sourceMonth + "，不读取本月累计值");
-        warnings.add(officialEligible
-                ? "月度出租率直接读取PMS上月JY07月报‘过夜房出租率’，不计钟点房，也不平均每日出租率"
-                : "月度出租率按累计分子÷累计分母重算，不平均每日出租率");
+        if (officialEligible && "VERIFIED_DIRECT_OVERNIGHT_OCCUPANCY".equals(monthly.hourlyRoomExclusionState())) {
+            warnings.add("月度出租率直接读取美团别样红JY07上月月报‘过夜房出租率’，不计钟点房，也不平均每日出租率");
+        } else if (officialEligible && "VERIFIED_SEPARATE_OVERNIGHT_RATE_ALL_DAY_AND_HOURLY_COLUMNS"
+                .equals(monthly.hourlyRoomExclusionState())) {
+            warnings.add("月度出租率直接读取罗盘云Inc59-1上月月报‘过夜出租率’，全天房与钟点房分列，钟点房不计入，也不平均每日出租率");
+        } else if (monthly != null && "ZERO_RATE_REQUIRES_VALIDATION".equals(monthly.accuracyState())) {
+            warnings.add("月报已接入但上一个自然月无有效经营分母，本月保持待核验且不计分，不把0%换算为0分");
+        } else {
+            warnings.add("月度出租率尚未通过正式计分口径校验，当前结果不得写入工资结算");
+        }
         warnings.add("试算结果不会写入指标事实、周考核单、月考核单或工资结算");
-        if (!officialEligible) warnings.add("钟点房剔除字段语义尚未完成PMS口径验收，候选得分不得作为正式工资依据");
+        if (!officialEligible && (monthly == null
+                || !"ZERO_RATE_REQUIRES_VALIDATION".equals(monthly.accuracyState()))) {
+            warnings.add("钟点房剔除字段语义尚未完成PMS口径验收，候选得分不得作为正式工资依据");
+        }
         result.put("warnings", warnings);
         return result;
     }
@@ -449,7 +462,7 @@ public class KpiSourcePreviewService {
         result.put("sourceProfile", hotel.sourceProfile());
         result.put("sourceConnectionState", hotel.sourceConnectionState());
         result.put("sourceConnectionMessage", hotel.sourceConnectionMessage());
-        result.put("snapshotAvailable", !hotel.snapshots().isEmpty());
+        result.put("snapshotAvailable", hasConfiguredCalculationSource(hotel));
         if (hotel.latest() != null) {
             result.put("latestBusinessDate", hotel.latest().businessDate());
             result.put("latestObservedAt", hotel.latest().observedAt());
@@ -458,6 +471,11 @@ public class KpiSourcePreviewService {
         }
         result.put("middlePlatformStoreBindingState", "DIRECTORY_BOUND_READ_ONLY_SOURCE");
         return result;
+    }
+
+    private boolean hasConfiguredCalculationSource(OtaKpiSnapshotReader.SourceHotel hotel) {
+        return !hotel.snapshots().isEmpty()
+                || hotel.sourceConnectionState().startsWith("MONTHLY_REPORT_AVAILABLE");
     }
 
     private List<Map<String, Object>> sourceMetrics(SourceAggregate value, boolean verifiedDirectOccupancy) {

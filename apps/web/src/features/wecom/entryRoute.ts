@@ -2,6 +2,7 @@ const WECOM_ENTRY_PATH = '/wecom-auth'
 const UNSAFE_CREDENTIAL_PARAMS = ['access_token', 'token', 'jwt', 'secret', 'corpsecret', 'corp_secret', 'wecom_secret'] as const
 const CODE_PATTERN = /^[A-Za-z0-9._~-]{16,512}$/
 const TASK_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const DAILY_REPORT_PATH_PATTERN = /^\/daily-reports\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i
 
 export type WecomTaskEntry = {
   code?: string
@@ -66,8 +67,27 @@ export function safeTaskDeepLink(returnTo: string | undefined): string {
 
   const normalized = returnTo.startsWith('#/') ? returnTo.slice(1) : returnTo
   const target = new URL(normalized, window.location.origin)
-  if (target.origin !== window.location.origin || target.pathname !== '/tasks') {
-    throw new Error('企微登录目标不是中台任务页面，系统已拒绝跳转。')
+  if (target.origin !== window.location.origin) {
+    throw new Error('企微登录目标不是中台任务或日报页面，系统已拒绝跳转。')
+  }
+
+  const reportMatch = target.pathname.match(DAILY_REPORT_PATH_PATTERN)
+  if (reportMatch) {
+    if (target.search || target.hash) {
+      throw new Error('企微日报目标包含非预期参数，系统已拒绝跳转。')
+    }
+    return `#/daily-reports/${reportMatch[1]}`
+  }
+
+  if (target.pathname === '/workbench') {
+    if (target.search || target.hash) {
+      throw new Error('企微工作台目标包含非预期参数，系统已拒绝跳转。')
+    }
+    return '#/workbench'
+  }
+
+  if (target.pathname !== '/tasks') {
+    throw new Error('企微登录目标不是允许的中台页面，系统已拒绝跳转。')
   }
   const taskId = target.searchParams.get('taskId')?.trim()
   if (!taskId || !TASK_ID_PATTERN.test(taskId)) {

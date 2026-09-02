@@ -56,11 +56,17 @@ import {
   type AppNavigate,
   type AppRouteId,
 } from './app/routeConfig'
+import { resolveNotificationNavigation } from './app/notificationNavigation'
 import { useHashRoute } from './app/useHashRoute'
 import { PageAccessBoundary } from './shared/PageAccessBoundary'
 import { WecomTaskEntryPage } from './features/wecom/WecomTaskEntry'
 import { buildAppHashLocation, consumeWecomTaskEntry } from './features/wecom/entryRoute'
 import { WecomStoreWebhookConfiguration } from './features/wecom/WecomStoreWebhookConfiguration'
+import { WecomUserBindingAdministration } from './features/wecom/WecomUserBindingAdministration'
+import { consumeWecomBindingEntry } from './features/wecom/bindingEntryRoute'
+import { WecomBindingEnrollmentEntry } from './features/wecom/WecomBindingEnrollmentEntry'
+import { WecomDirectoryOnboardingAdministration } from './features/wecom/WecomDirectoryOnboardingAdministration'
+import { AllFunctionsPage, MobileBottomNavigation } from './shared/MobileAppNavigation'
 
 const icpRecordNumber = (import.meta.env.VITE_ICP_RECORD_NUMBER ?? '').trim()
 
@@ -70,6 +76,7 @@ const DailyOperationFeature = lazy(() => import('./features/dailyOperations/Dail
 const KpiFeature = lazy(() => import('./features/kpi/KpiRoutes').then((module) => ({ default: module.KpiRoutes })))
 const InvestmentFeature = lazy(() => import('./features/investments/InvestmentRoutes').then((module) => ({ default: module.InvestmentRoutes })))
 const initialWecomTaskEntry = consumeWecomTaskEntry()
+const initialWecomBindingEntry = consumeWecomBindingEntry()
 
 const navigation: Array<{ id: AppRouteId; sectionId?: string; label: string; icon: string; group?: string; permissions?: string[]; roles?: string[] }> = [
   { id: 'workbench', label: '角色工作台', icon: '⌂' },
@@ -88,8 +95,10 @@ const navigation: Array<{ id: AppRouteId; sectionId?: string; label: string; ico
   { id: 'notifications', label: '通知中心', icon: '◉', permissions: ['notification.read'] },
   { id: 'templates', label: '集团模板配置', icon: '▧', group: '系统配置', permissions: ['template.manage'] },
   { id: 'daily-report-templates', label: '日报模板中心', icon: '▤', permissions: [permissionCodes.dailyReportTemplate.read, permissionCodes.dailyReportTemplate.edit, permissionCodes.dailyReportTemplate.publish] },
-  { id: 'organization', label: '组织与权限', icon: '⚙', group: '系统配置', permissions: ['org.read'] },
+  { id: 'organization', label: '组织与权限', icon: '⚙', group: '系统配置', permissions: ['org.manage', 'position-profile.read'] },
   { id: 'wecom-webhooks', label: '企业微信 Webhook', icon: '◉', group: '系统配置', permissions: ['org.manage'] },
+  { id: 'wecom-onboarding', label: '企业微信入职审核', icon: '人', group: '系统配置', permissions: [permissionCodes.wecomBinding.read] },
+  { id: 'wecom-bindings', label: '企微绑定与异常', icon: '◎', permissions: [permissionCodes.wecomBinding.read] },
 ]
 
 const roleStorageKey = 'hotel-ai-os-role:v1'
@@ -622,7 +631,7 @@ function Evaluations({ identity, routeParams, go }: { identity: RoleContext; rou
   </section>
 }
 
-function Notifications({ identity, routeParams, go }: { identity: RoleContext; routeParams: RouteParams; go: AppNavigate }) {
+function Notifications({ identity, permissions, routeParams, go }: { identity: RoleContext; permissions: string[]; routeParams: RouteParams; go: AppNavigate }) {
   const resource = useResource(`${identity.key}:notifications`, () => loadNotifications(identity), [], 15_000)
   const [busy, setBusy] = useState<string>()
   const [commandError, setCommandError] = useState<string>()
@@ -641,7 +650,10 @@ function Notifications({ identity, routeParams, go }: { identity: RoleContext; r
     <div className="filters"><button className={!unreadOnly ? 'active' : ''} onClick={() => go('notifications')}>全部通知</button><button className={unreadOnly ? 'active' : ''} onClick={() => go('notifications', { unread: 'true' })}>仅未读</button></div>
     {commandError && <div className="inline-error page-error">{commandError}</div>}
     <DataState loading={resource.loading} error={resource.error} empty={!notices.length} onRetry={resource.reload} />
-    {!resource.loading && !resource.error && <div className="notification-page">{notices.map((item) => <article className={item.readAt ? 'read' : ''} key={item.id}><i /><div><span><Status value={item.type} /><small>{formatDate(item.createdAt)}</small></span><h2>{item.title}</h2><p>{item.content}</p></div>{item.sourceType?.toUpperCase() === 'DAILY_REPORT' && item.sourceId && <button className="primary" onClick={() => go('daily-report-detail', { reportId: item.sourceId })}>去填报</button>}{!item.readAt && <button className="secondary" disabled={busy === item.id} onClick={() => markRead(item.id)}>{busy === item.id ? '处理中…' : '标记已读'}</button>}</article>)}</div>}
+    {!resource.loading && !resource.error && <div className="notification-page">{notices.map((item) => {
+      const target = resolveNotificationNavigation(item, permissions)
+      return <article className={item.readAt ? 'read' : ''} key={item.id}><i /><div><span><Status value={item.type} /><small>{formatDate(item.createdAt)}</small></span><h2>{item.title}</h2><p>{item.content}</p></div><div className="notification-actions">{target && <button className="primary" onClick={() => go(target.view, target.params)}>{target.actionLabel}</button>}{!item.readAt && <button className="secondary" disabled={busy === item.id} onClick={() => markRead(item.id)}>{busy === item.id ? '处理中…' : '标记已读'}</button>}</div></article>
+    })}</div>}
   </section>
 }
 
@@ -743,23 +755,28 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     ?? compatibleAssignments.find((item) => item.primary)
     ?? compatibleAssignments[0]
   const isPlatformAdmin = me.data.roleCodes.includes('PLATFORM_ADMIN')
+  const isFullAccountLevel = isPlatformAdmin || me.data.roleCodes.includes('CEO')
   const accountRoleContext = roleContexts.find((role) => role.roleCode === me.data.primaryRoleCode)
-  const selectedRoleContext = isPlatformAdmin ? undefined : roleContexts.find((role) => role.roleCode === selectedAssignment?.positionCode)
-  const resolvedRoleContext = isPlatformAdmin ? accountRoleContext : selectedRoleContext ?? accountRoleContext
+  const selectedRoleContext = isFullAccountLevel ? undefined : roleContexts.find((role) => role.roleCode === selectedAssignment?.positionCode)
+  const resolvedRoleContext = isFullAccountLevel ? accountRoleContext : selectedRoleContext ?? accountRoleContext
   const activeIdentity: RoleContext = useMemo(() => ({
     ...(resolvedRoleContext ?? identity),
-    key: `${resolvedRoleContext?.key ?? identity.key}:${isPlatformAdmin ? 'account' : selectedAssignment?.id ?? 'account'}`,
+    key: `${resolvedRoleContext?.key ?? identity.key}:${isFullAccountLevel ? 'account' : selectedAssignment?.id ?? 'account'}`,
     actorId: me.data.accountId || identity.actorId,
     userName: me.data.displayName || identity.userName,
     employeeId: me.data.employeeId,
-    assignmentOrgUnitId: isPlatformAdmin ? undefined : selectedAssignment?.orgUnitId,
-    roleCode: isPlatformAdmin ? 'PLATFORM_ADMIN' : selectedRoleContext?.roleCode ?? (me.data.primaryRoleCode || identity.roleCode),
+    assignmentOrgUnitId: isFullAccountLevel ? undefined : selectedAssignment?.orgUnitId,
+    roleCode: isFullAccountLevel ? me.data.primaryRoleCode : selectedRoleContext?.roleCode ?? (me.data.primaryRoleCode || identity.roleCode),
     orgScopes: authMode === 'bearer' ? me.data.orgScopes : me.data.orgScopes.length ? me.data.orgScopes : identity.orgScopes,
-    assignmentId: isPlatformAdmin ? undefined : selectedAssignment?.id ?? (authMode === 'bearer' ? undefined : identity.assignmentId),
-    label: isPlatformAdmin ? resolvedRoleContext?.label ?? identity.label : selectedAssignment?.positionName ?? resolvedRoleContext?.label ?? identity.label,
-    orgName: isPlatformAdmin ? resolvedRoleContext?.orgName ?? identity.orgName : selectedAssignment?.orgName ?? resolvedRoleContext?.orgName ?? identity.orgName,
+    assignmentId: isFullAccountLevel ? undefined : selectedAssignment?.id ?? (authMode === 'bearer' ? undefined : identity.assignmentId),
+    label: isFullAccountLevel ? resolvedRoleContext?.label ?? identity.label : selectedAssignment?.positionName ?? resolvedRoleContext?.label ?? identity.label,
+    orgName: isFullAccountLevel ? resolvedRoleContext?.orgName ?? identity.orgName : selectedAssignment?.orgName ?? resolvedRoleContext?.orgName ?? identity.orgName,
     focus: resolvedRoleContext?.focus ?? identity.focus,
-  }), [identity, isPlatformAdmin, me.data, resolvedRoleContext, selectedAssignment, selectedRoleContext])
+  }), [identity, isFullAccountLevel, me.data, resolvedRoleContext, selectedAssignment, selectedRoleContext])
+  const activePermissions = useMemo(() => {
+    if (isFullAccountLevel) return me.data.permissions
+    return selectedAssignment?.permissionCodes !== undefined ? selectedAssignment.permissionCodes : me.data.permissions
+  }, [isFullAccountLevel, me.data.permissions, selectedAssignment?.permissionCodes])
   useEffect(() => {
     if (!me.loading && !me.error && isPlatformAdmin && !route.explicit && view === 'workbench') {
       navigate('kpi-center')
@@ -773,13 +790,13 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     if (item.roles?.length && !item.roles.includes(activeIdentity.roleCode)) return false
     return !item.permissions?.length ||
       (demoFallbackEnabled && me.source === 'demo' && !isDailyFeatureRoute(item.id) && !isInvestmentFeatureRoute(item.id)) ||
-      me.data.permissions.includes('*') ||
-      item.permissions.some((permission) => me.data.permissions.includes(permission))
+      activePermissions.includes('*') ||
+      item.permissions.some((permission) => activePermissions.includes(permission))
   })
   const navigationTarget = (id: AppRouteId): AppRouteId => {
     if (id !== 'daily-reports-my') return id
     const canUseOwnReport = Boolean(activeIdentity.assignmentId) &&
-      (me.data.permissions.includes('*') || me.data.permissions.includes(permissionCodes.dailyReport.readOwn) || me.data.permissions.includes(permissionCodes.dailyReport.submit))
+      (activePermissions.includes('*') || activePermissions.includes(permissionCodes.dailyReport.readOwn) || activePermissions.includes(permissionCodes.dailyReport.submit))
     return canUseOwnReport ? 'daily-reports-my' : 'daily-reports-team'
   }
   const page = useMemo(() => {
@@ -788,25 +805,25 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     }
     if (isInvestmentFeatureRoute(view)) {
       return <PageAccessBoundary
-        permissions={me.data.permissions}
+        permissions={activePermissions}
         requiredAny={requiredPermissionsForRoute(view)}
         requiredAll={requiredAllPermissionsForRoute(view, routeParams)}
       >
         <Suspense fallback={<div className="state-card"><div className="spinner" /><strong>正在加载投资测算模块</strong></div>}>
-          <InvestmentFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={me.data.permissions} go={navigate} />
+          <InvestmentFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={activePermissions} go={navigate} />
         </Suspense>
       </PageAccessBoundary>
     }
     if (isDailyFeatureRoute(view)) {
       const feature = view.startsWith('kpi-') || view === 'kpi-center'
-        ? <KpiFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={me.data.permissions} go={navigate} />
+        ? <KpiFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={activePermissions} go={navigate} />
         : view.startsWith('daily-report-template')
-        ? <DailyReportTemplateFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={me.data.permissions} go={navigate} />
+        ? <DailyReportTemplateFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={activePermissions} go={navigate} />
         : view.startsWith('daily-report')
-          ? <DailyReportFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={me.data.permissions} go={navigate} />
-          : <DailyOperationFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={me.data.permissions} go={navigate} />
+          ? <DailyReportFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={activePermissions} go={navigate} />
+          : <DailyOperationFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={activePermissions} go={navigate} />
       return <PageAccessBoundary
-        permissions={me.data.permissions}
+        permissions={activePermissions}
         requiredAny={requiredPermissionsForRoute(view)}
         requiredAll={requiredAllPermissionsForRoute(view, routeParams)}
       >
@@ -815,24 +832,42 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     }
     let legacyPage: React.ReactNode
     switch (view) {
-      case 'workbench': legacyPage = <Workbench identity={activeIdentity} permissions={me.data.permissions} go={navigate} />; break
+      case 'workbench': legacyPage = <Workbench identity={activeIdentity} permissions={activePermissions} go={navigate} />; break
+      case 'all-functions': legacyPage = <AllFunctionsPage
+        items={visibleNavigation}
+        roleLabel={activeIdentity.label}
+        orgName={activeIdentity.orgName}
+        go={navigate}
+        resolveTarget={navigationTarget}
+        onChangePassword={authMode === 'bearer' ? () => setChangingPassword(true) : undefined}
+        onLogout={authMode === 'bearer' ? onLogout : undefined}
+      />; break
       case 'hotel-dashboard': legacyPage = <HotelDashboardPage identity={activeIdentity} routeParams={routeParams} go={navigate} />; break
       case 'operations-dashboard': legacyPage = <OperationsDashboardPage identity={activeIdentity} />; break
-      case 'work-packages': legacyPage = <WorkPackageCenter identity={activeIdentity} permissions={me.data.permissions} />; break
+      case 'work-packages': legacyPage = <WorkPackageCenter identity={activeIdentity} permissions={activePermissions} />; break
       case 'my-work': legacyPage = <MyWork identity={activeIdentity} routeParams={routeParams} go={navigate} />; break
-      case 'team-work': legacyPage = <TeamWork identity={activeIdentity} permissions={me.data.permissions} routeParams={routeParams} />; break
-      case 'rules': legacyPage = <Rules identity={activeIdentity} permissions={me.data.permissions} />; break
-      case 'tasks': legacyPage = <Tasks identity={activeIdentity} permissions={me.data.permissions} routeParams={routeParams} go={navigate} />; break
+      case 'team-work': legacyPage = <TeamWork identity={activeIdentity} permissions={activePermissions} routeParams={routeParams} />; break
+      case 'rules': legacyPage = <Rules identity={activeIdentity} permissions={activePermissions} />; break
+      case 'tasks': legacyPage = <Tasks identity={activeIdentity} permissions={activePermissions} routeParams={routeParams} go={navigate} />; break
       case 'evaluations': legacyPage = <Evaluations identity={activeIdentity} routeParams={routeParams} go={navigate} />; break
-      case 'notifications': legacyPage = <Notifications identity={activeIdentity} routeParams={routeParams} go={navigate} />; break
-      case 'templates': legacyPage = <EnterpriseTemplateCenter identity={activeIdentity} permissions={me.data.permissions} />; break
-      case 'organization': legacyPage = <OrganizationCenter identity={activeIdentity} permissions={me.data.permissions} />; break
-      case 'wecom-webhooks': legacyPage = <WecomStoreWebhookConfiguration identity={activeIdentity} permissions={me.data.permissions} />; break
+      case 'notifications': legacyPage = <Notifications identity={activeIdentity} permissions={activePermissions} routeParams={routeParams} go={navigate} />; break
+      case 'templates': legacyPage = <EnterpriseTemplateCenter identity={activeIdentity} permissions={activePermissions} />; break
+      case 'organization': legacyPage = <OrganizationCenter identity={activeIdentity} permissions={activePermissions} routeParams={routeParams} />; break
+      case 'wecom-webhooks': legacyPage = <WecomStoreWebhookConfiguration identity={activeIdentity} permissions={activePermissions} />; break
+      case 'wecom-bindings': legacyPage = <WecomUserBindingAdministration identity={activeIdentity} requestId={routeParams.requestId} onClearRequest={() => navigate('wecom-bindings')} />; break
+      case 'wecom-onboarding': legacyPage = <WecomDirectoryOnboardingAdministration
+        identity={activeIdentity}
+        canApprove={activePermissions.includes('*') || activePermissions.includes(permissionCodes.wecomBinding.approve)}
+        canManage={activePermissions.includes('*') || activePermissions.includes(permissionCodes.wecomBinding.manage)}
+        candidateId={routeParams.candidateId}
+        directoryEventId={routeParams.directoryEventId}
+        onClearTarget={() => navigate('wecom-onboarding')}
+      />; break
     }
     const routeAccess = navigation.find((item) => item.id === view)
     const contextAllowed = (view !== 'my-work' || Boolean(activeIdentity.assignmentId)) &&
       (!routeAccess?.roles?.length || routeAccess.roles.includes(activeIdentity.roleCode))
-    const boundaryPermissions = demoFallbackEnabled && me.source === 'demo' ? ['*'] : me.data.permissions
+    const boundaryPermissions = demoFallbackEnabled && me.source === 'demo' ? ['*'] : activePermissions
     return <PageAccessBoundary
       permissions={boundaryPermissions}
       requiredAny={routeAccess?.permissions ?? []}
@@ -840,7 +875,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     >
       {legacyPage}
     </PageAccessBoundary>
-  }, [view, routeParams, activeIdentity, me.data.permissions, me.error, me.loading])
+  }, [view, routeParams, activeIdentity, activePermissions, me.error, me.loading])
   const changeRole = (key: string) => {
     const next = roleContexts.find((role) => role.key === key)
     if (!next) return
@@ -854,16 +889,36 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       <nav>{visibleNavigation.map((item, index) => <div key={item.id}>{item.group && <span className="nav-group">{item.group}</span>}<button className={sectionId === (item.sectionId ?? item.id) ? 'active' : ''} onClick={() => navigate(navigationTarget(item.id))}><i>{item.icon}</i><span>{item.label}</span>{item.id === 'notifications' && unreadCount > 0 && <b>{unreadCount}</b>}</button>{index === 0 && <div className="nav-separator" />}</div>)}</nav>
       <div className="sidebar-footer"><span>{product.version}</span><small>标准 → 工作 → 任务 → 执行 → 验收</small>{icpRecordNumber && <a className="icp-record" href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">{icpRecordNumber}</a>}</div>
     </aside>
-    <main><header className="topbar"><div className={`connection ${me.error ? 'offline' : pilotDemoMode ? 'demo' : ''}`}><span className="live-dot" />{pilotDemoMode ? 'Pilot 演示数据' : me.error ? '身份接口异常' : '服务端权限已解析'}<small>{pilotDemoMode ? '仅用于界面与流程走查，不代表真实业务数据或权限' : authMode === 'dev-header' ? '本地验收账号 · 权限由数据库决定' : 'JWT/SSO 会话身份'}</small></div><span className="pilot-badge">{product.editionLabel}</span>
-      {authMode === 'dev-header' && <label className="context-select"><span>验收账号</span><select value={identity.key} onChange={(event) => changeRole(event.target.value)}>{roleContexts.map((role) => <option value={role.key} key={role.key}>{role.label} · {role.userName}</option>)}</select></label>}
-      {!isPlatformAdmin && !!compatibleAssignments.length && <label className="context-select"><span>当前任职</span><select value={selectedAssignment?.id ?? ''} onChange={(event) => setSelectedAssignmentId(event.target.value)}>{compatibleAssignments.map((assignment) => <option value={assignment.id} key={assignment.id}>{assignment.positionName} · {assignment.orgName}{assignment.primary ? '（主岗）' : ''}</option>)}</select></label>}
-      <button className="bell" onClick={() => navigate('notifications')} aria-label="通知">◉{unreadCount > 0 && <b>{unreadCount}</b>}</button>
+    <main><header className="topbar"><div className="mobile-top-brand" aria-label={product.name}><span>四</span></div><div className={`connection ${me.error ? 'offline' : pilotDemoMode ? 'demo' : ''}`}><span className="live-dot" />{pilotDemoMode ? 'Pilot 演示数据' : me.error ? '身份接口异常' : '服务端权限已解析'}<small>{pilotDemoMode ? '仅用于界面与流程走查，不代表真实业务数据或权限' : authMode === 'dev-header' ? '本地验收账号 · 权限由数据库决定' : 'JWT/SSO 会话身份'}</small></div><span className="pilot-badge">{product.editionLabel}</span>
+      {authMode === 'dev-header' && <label className="context-select account-context"><span>验收账号</span><select value={identity.key} onChange={(event) => changeRole(event.target.value)}>{roleContexts.map((role) => <option value={role.key} key={role.key}>{role.label} · {role.userName}</option>)}</select></label>}
+      {!isFullAccountLevel && !!compatibleAssignments.length && <label className="context-select assignment-context"><span>当前任职</span><select value={selectedAssignment?.id ?? ''} onChange={(event) => setSelectedAssignmentId(event.target.value)}>{compatibleAssignments.map((assignment) => <option value={assignment.id} key={assignment.id}>{assignment.positionName} · {assignment.orgName}{assignment.primary ? '（主岗）' : ''}</option>)}</select></label>}
+      {isFullAccountLevel && <span className="mobile-current-context">{activeIdentity.label}</span>}
+      <button className="bell" onClick={() => navigate('notifications')} aria-label={unreadCount > 0 ? `消息，${unreadCount}条未读` : '消息'}>消息{unreadCount > 0 && <b>{unreadCount}</b>}</button>
       <div className="user"><span>{activeIdentity.userName.slice(-1)}</span><div><strong>{activeIdentity.userName}</strong><small>{activeIdentity.label}</small></div></div>
       {authMode === 'bearer' && <button className="logout-button" onClick={() => setChangingPassword(true)}>修改密码</button>}
       {authMode === 'bearer' && <button className="logout-button" onClick={onLogout}>退出</button>}
     </header>
       {demoFallbackEnabled && <div className="demo-warning">已显式启用演示回退：仅当真实 API 请求失败时展示演示数据；API 返回空结果时仍显示空状态。</div>}
       <div className="canvas">{page}</div>
+      <MobileBottomNavigation
+        sectionId={sectionId}
+        go={navigate}
+        unreadCount={unreadCount}
+        resolveTarget={(id) => {
+          if (id === 'all-functions') return id
+          if (id === 'tasks') {
+            const preferred = visibleNavigation.find((item) => item.id === 'tasks')
+              ?? visibleNavigation.find((item) => item.id === 'my-work')
+              ?? visibleNavigation.find((item) => item.id === 'team-work')
+            return preferred?.id ?? 'all-functions'
+          }
+          if (id === 'daily-reports-my') {
+            return visibleNavigation.some((item) => item.id === 'daily-reports-my') ? navigationTarget(id) : 'all-functions'
+          }
+          if (id === 'notifications') return visibleNavigation.some((item) => item.id === id) ? id : 'all-functions'
+          return id
+        }}
+      />
       {changingPassword && <ChangePasswordDialog identity={activeIdentity} onClose={() => setChangingPassword(false)} onChanged={() => { setChangingPassword(false); onLogout?.() }} />}
     </main>
   </div>
@@ -875,6 +930,7 @@ export default function App() {
     return authMode !== 'bearer' || hasAccessToken()
   })
   const [wecomTaskEntry, setWecomTaskEntry] = useState(initialWecomTaskEntry)
+  const [wecomBindingEntry, setWecomBindingEntry] = useState(initialWecomBindingEntry)
   useEffect(() => {
     const expired = () => setAuthenticated(false)
     window.addEventListener('hotel-ai-os:auth-expired', expired)
@@ -886,6 +942,13 @@ export default function App() {
     onCancel={() => {
       window.history.replaceState(null, '', buildAppHashLocation('#/', import.meta.env.BASE_URL))
       setWecomTaskEntry(undefined)
+    }}
+  />
+  if (wecomBindingEntry) return <WecomBindingEnrollmentEntry
+    entry={wecomBindingEntry}
+    onReturn={() => {
+      window.history.replaceState(null, '', buildAppHashLocation('#/', import.meta.env.BASE_URL))
+      setWecomBindingEntry(undefined)
     }}
   />
   if (!authenticated) return <LoginPage onAuthenticated={() => setAuthenticated(true)} />

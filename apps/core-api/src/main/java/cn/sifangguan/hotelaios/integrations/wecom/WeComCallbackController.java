@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/v1/integrations/wecom/bot/callback")
-@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"app.wecom.enabled", "app.wecom.bot.actions-enabled"}, havingValue = "true")
 public class WeComCallbackController {
     private final WeComCallbackService service;
 

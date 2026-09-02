@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 @Service
-@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"app.wecom.enabled", "app.wecom.bot.actions-enabled"}, havingValue = "true")
 public class WeComInboundReceiptService {
     private final NamedParameterJdbcTemplate jdbc;
     private final TenantDatabaseContext databaseContext;

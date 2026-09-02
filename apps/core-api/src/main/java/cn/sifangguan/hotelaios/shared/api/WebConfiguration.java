@@ -20,7 +20,8 @@ public class WebConfiguration implements WebMvcConfigurer {
                 .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE")
                 .allowedHeaders(
                         "Authorization", "Content-Type", "Idempotency-Key", "If-Match",
-                        "X-Tenant-Id", "X-Actor-Id", "X-Role-Code", "X-Org-Scope", "X-Correlation-Id"
+                        "X-Tenant-Id", "X-Actor-Id", "X-Role-Code", "X-Org-Scope",
+                        "X-Assignment-Id", "X-Correlation-Id"
                 )
                 .allowCredentials(true)
                 .exposedHeaders("X-Correlation-Id");

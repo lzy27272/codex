@@ -122,5 +122,26 @@ final class PmsMonthlyKpiReader {
                     && duplicateDayCount == 0
                     && occupancyRate != null;
         }
+
+        boolean officialOccupancyEligible() {
+            if (!candidateEligible() || !officialScoreEligible) return false;
+            boolean directJy07 = "PMS_DIRECT_OVERNIGHT_OCCUPANCY".equals(denominatorSource)
+                    && "VERIFIED_DIRECT_OVERNIGHT_OCCUPANCY".equals(hourlyRoomExclusionState)
+                    && "NUMERICALLY_VALIDATED".equals(accuracyState);
+            boolean luopanDailyOvernight = "PMS_DAILY_OVERNIGHT_RATE_AND_ALL_DAY_ROOMS".equals(denominatorSource)
+                    && "VERIFIED_SEPARATE_OVERNIGHT_RATE_ALL_DAY_AND_HOURLY_COLUMNS"
+                    .equals(hourlyRoomExclusionState)
+                    && "NUMERICALLY_AND_DEFINITION_VALIDATED".equals(accuracyState)
+                    && "FULL_MONTH_STABLE".equals(capacityEvidenceState)
+                    && roomCapacity != null
+                    && roomCapacity.signum() > 0;
+            boolean luopanDirectOvernight =
+                    "PMS_DIRECT_OVERNIGHT_OCCUPANCY_WITH_SEPARATE_HOURLY_COLUMNS"
+                    .equals(denominatorSource)
+                    && "VERIFIED_SEPARATE_OVERNIGHT_RATE_ALL_DAY_AND_HOURLY_COLUMNS"
+                    .equals(hourlyRoomExclusionState)
+                    && "NUMERICALLY_AND_DEFINITION_VALIDATED".equals(accuracyState);
+            return directJy07 || luopanDailyOvernight || luopanDirectOvernight;
+        }
     }
 }

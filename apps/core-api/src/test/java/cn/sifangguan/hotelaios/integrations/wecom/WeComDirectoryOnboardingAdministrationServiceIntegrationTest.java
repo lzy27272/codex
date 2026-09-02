@@ -1,0 +1,1669 @@
+package cn.sifangguan.hotelaios.integrations.wecom;
+
+import cn.sifangguan.hotelaios.shared.audit.AuditWriter;
+import cn.sifangguan.hotelaios.shared.context.TenantPrincipal;
+import cn.sifangguan.hotelaios.shared.db.TenantDatabaseContext;
+import cn.sifangguan.hotelaios.shared.security.AccessPolicy;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import javax.sql.DataSource;
+import java.net.URI;
+import java.sql.Connection;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.ApprovalResponse;
+import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.DirectoryEventRetryResponse;
+import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.DecisionRequest;
+import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.InvitationActionResponse;
+import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.RetryRequest;
+import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.SubmitRequest;
+import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.SubmitResponse;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
+    private static final UUID TENANT = UUID.fromString("10000000-0000-0000-0000-000000000001");
+    private static final UUID CEO = UUID.fromString("19000000-0000-0000-0000-000000000001");
+    private static final UUID FRONT_ACCOUNT = UUID.fromString("19000000-0000-0000-0000-000000000003");
+    private static final UUID FRONT_DEPARTMENT = UUID.fromString("12000000-0000-0000-0000-000000000005");
+    private static final UUID HOUSEKEEPING_DEPARTMENT = UUID.fromString("12000000-0000-0000-0000-000000000006");
+    private static final UUID FRONT_POSITION = UUID.fromString("14000000-0000-0000-0000-000000000001");
+    private static final UUID HOUSEKEEPING_POSITION = UUID.fromString("14000000-0000-0000-0000-000000000002");
+    private static final String CORP_ID = "ww-directory-integration-test";
+    private static final String ENCRYPTION_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+
+    private static final EmbeddedPostgres POSTGRES = startPostgres();
+    private static final DataSource DATA_SOURCE = POSTGRES.getPostgresDatabase();
+
+    private JdbcTemplate jdbc;
+    private PlatformTransactionManager transactionManager;
+    private WeComDirectorySecretCodec codec;
+    private WeComDirectoryProperties properties;
+    private WeComDirectoryOnboardingAdministrationService service;
+    private WeComDirectoryOnboardingService employeeService;
+    private WeComDirectoryEventProcessor eventProcessor;
+
+    @BeforeAll
+    static void migrateDatabase() {
+        Flyway.configure()
+                .dataSource(DATA_SOURCE)
+                .locations("classpath:db/migration")
+                .cleanDisabled(true)
+                .load()
+                .migrate();
+    }
+
+    @AfterAll
+    static void stopPostgres() throws Exception {
+        POSTGRES.close();
+    }
+
+    @BeforeEach
+    void setUp() {
+        jdbc = new JdbcTemplate(DATA_SOURCE);
+        transactionManager = new DataSourceTransactionManager(DATA_SOURCE);
+        jdbc.update("delete from wecom_person_onboarding where corp_id = ?", CORP_ID);
+        jdbc.update("delete from wecom_user_binding where corp_id = ?", CORP_ID);
+        jdbc.update("delete from wecom_directory_event_receipt where corp_id = ?", CORP_ID);
+
+        TenantPrincipal principal = new TenantPrincipal(
+                TENANT, CEO, "CEO", Set.of("CEO"), Set.of("wecom-binding.approve"),
+                Set.of(), Set.of(), true, UUID.randomUUID());
+        AccessPolicy accessPolicy = mock(AccessPolicy.class);
+        when(accessPolicy.principal()).thenReturn(principal);
+
+        properties = mock(WeComDirectoryProperties.class);
+        when(properties.tenantId()).thenReturn(TENANT);
+        when(properties.corpId()).thenReturn(CORP_ID);
+        when(properties.encryptionKey()).thenReturn(ENCRYPTION_KEY);
+        when(properties.frontendBaseUrl()).thenReturn(URI.create("https://www.sfgzt.cn"));
+        when(properties.invitationTtl()).thenReturn(Duration.ofMinutes(120));
+        codec = new WeComDirectorySecretCodec(properties);
+        employeeService = mock(WeComDirectoryOnboardingService.class);
+        eventProcessor = mock(WeComDirectoryEventProcessor.class);
+        when(employeeService.newInvitationToken())
+                .thenAnswer(ignored -> "integration-" + UUID.randomUUID());
+
+        service = new WeComDirectoryOnboardingAdministrationService(
+                new NamedParameterJdbcTemplate(DATA_SOURCE),
+                mock(TenantDatabaseContext.class),
+                accessPolicy,
+                mock(AuditWriter.class),
+                new ObjectMapper(),
+                properties,
+                codec,
+                mock(WeComApiClient.class),
+                employeeService,
+                eventProcessor);
+
+        publishSelectableProfile(FRONT_POSITION);
+        publishSelectableProfile(HOUSEKEEPING_POSITION);
+    }
+
+    @Test
+    void concurrentConfirmedTransferCreatesOneIdentityChainAndReturnsTheSameAccount() throws Exception {
+        String userId = "concurrent-transfer-" + UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        insertBinding(bindingId, userId, FRONT_ACCOUNT, null);
+        insertCandidate(candidateId, userId, "NEW_MEMBER", null, null,
+                "CONFLICT", FRONT_ACCOUNT, FRONT_DEPARTMENT, FRONT_POSITION);
+
+        Counts before = identityCounts();
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        Callable<Attempt> approval = () -> {
+            ready.countDown();
+            start.await(10, TimeUnit.SECONDS);
+            try {
+                ApprovalResponse response = inTransaction(() -> service.approve(
+                        candidateId, new DecisionRequest(0, "confirmed transfer", true)));
+                return new Attempt(response, null);
+            } catch (Throwable failure) {
+                return new Attempt(null, failure);
+            }
+        };
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Attempt> first = executor.submit(approval);
+            Future<Attempt> second = executor.submit(approval);
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            Attempt firstAttempt = first.get(20, TimeUnit.SECONDS);
+            Attempt secondAttempt = second.get(20, TimeUnit.SECONDS);
+            assertThat(firstAttempt.failure()).isNull();
+            assertThat(secondAttempt.failure()).isNull();
+            assertThat(firstAttempt.response().status()).isEqualTo("APPROVED");
+            assertThat(secondAttempt.response().status()).isEqualTo("APPROVED");
+            assertThat(firstAttempt.response().accountId())
+                    .isEqualTo(secondAttempt.response().accountId())
+                    .isNotEqualTo(FRONT_ACCOUNT);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        UUID approvedAccount = uuidValue(
+                "select account_id from wecom_person_onboarding where id = ?", candidateId);
+        Counts after = identityCounts();
+        assertThat(after.accounts() - before.accounts()).isOne();
+        assertThat(after.employees() - before.employees()).isOne();
+        assertThat(after.assignments() - before.assignments()).isOne();
+        assertThat(after.roles() - before.roles()).isOne();
+        assertThat(after.bindings() - before.bindings()).isOne();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from user_account where id = ?", Integer.class, approvedAccount)).isOne();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from employee where account_id = ?", Integer.class, approvedAccount)).isOne();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from employee_position_assignment assignment "
+                        + "join employee on employee.id = assignment.employee_id "
+                        + "where employee.account_id = ?", Integer.class, approvedAccount)).isOne();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from role_assignment where account_id = ?", Integer.class, approvedAccount)).isOne();
+        assertThat(jdbc.queryForMap("""
+                select account_id, status, status_reason
+                from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("account_id", FRONT_ACCOUNT)
+                .containsEntry("status", "REVOKED")
+                .containsEntry("status_reason", "IDENTITY_TRANSFERRED_BY_ONBOARDING");
+        UUID approvedBinding = uuidValue(
+                "select binding_id from wecom_person_onboarding where id = ?", candidateId);
+        assertThat(approvedBinding).isNotEqualTo(bindingId);
+        assertThat(uuidValue("select account_id from wecom_user_binding where id = ?", approvedBinding))
+                .isEqualTo(approvedAccount);
+        assertThat(jdbc.queryForObject(
+                "select count(*) from wecom_user_binding where tenant_id = ? and corp_id = ? and wecom_user_id = ?",
+                Integer.class, TENANT, CORP_ID, userId)).isOne();
+    }
+
+    @Test
+    void assignmentUpdateAfterNewMemberTransferKeepsTheCurrentAccountAndNeverRevivesTheOldOne() {
+        String userId = "transfer-then-assignment-" + UUID.randomUUID();
+        UUID oldBindingId = UUID.randomUUID();
+        UUID transferCandidateId = UUID.randomUUID();
+        insertBinding(oldBindingId, userId, FRONT_ACCOUNT, null);
+        insertCandidate(transferCandidateId, userId, "NEW_MEMBER", null, null,
+                "CONFLICT", FRONT_ACCOUNT, FRONT_DEPARTMENT, FRONT_POSITION);
+
+        ApprovalResponse transferred = inTransaction(() -> service.approve(
+                transferCandidateId, new DecisionRequest(0, "confirmed identity transfer", true)));
+        UUID currentAccountId = transferred.accountId();
+        UUID currentBindingId = uuidValue(
+                "select binding_id from wecom_person_onboarding where id = ?", transferCandidateId);
+        assertThat(currentAccountId).isNotEqualTo(FRONT_ACCOUNT);
+        assertThat(currentBindingId).isNotEqualTo(oldBindingId);
+
+        OffsetDateTime changedAt = OffsetDateTime.now().plusMinutes(1);
+        WeComDirectoryEvent changed = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Transferred employee", "1", "new-department", "new-position", changedAt);
+        UUID receiptId = insertReceipt(changed, changedAt.plusSeconds(1));
+
+        assertThat(inTransaction(() -> lifecycleService().handleDirectoryEvent(
+                changed, receiptId, UUID.randomUUID()))).isTrue();
+
+        UUID assignmentCandidateId = uuidValue("""
+                select id from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ?
+                  and status = 'WAITING_PROFILE' and onboarding_kind = 'ASSIGNMENT_CHANGE'
+                """, CORP_ID, codec.fingerprint(userId));
+        assertThat(jdbc.queryForMap("""
+                select source_account_id, source_binding_id
+                from wecom_person_onboarding where id = ?
+                """, assignmentCandidateId))
+                .containsEntry("source_account_id", currentAccountId)
+                .containsEntry("source_binding_id", currentBindingId);
+        makeCandidateApprovable(
+                assignmentCandidateId, HOUSEKEEPING_DEPARTMENT, HOUSEKEEPING_POSITION);
+        long version = jdbc.queryForObject(
+                "select row_version from wecom_person_onboarding where id = ?",
+                Long.class, assignmentCandidateId);
+
+        ApprovalResponse reassigned = inTransaction(() -> service.approve(
+                assignmentCandidateId, new DecisionRequest(version, "assignment reviewed", false)));
+
+        assertThat(reassigned.accountId()).isEqualTo(currentAccountId);
+        assertThat(jdbc.queryForMap("""
+                select account_id, status, status_reason
+                from wecom_user_binding where id = ?
+                """, oldBindingId))
+                .containsEntry("account_id", FRONT_ACCOUNT)
+                .containsEntry("status", "REVOKED")
+                .containsEntry("status_reason", "IDENTITY_TRANSFERRED_BY_ONBOARDING");
+        assertThat(jdbc.queryForMap("""
+                select account_id, status from wecom_user_binding where id = ?
+                """, currentBindingId))
+                .containsEntry("account_id", currentAccountId)
+                .containsEntry("status", "ACTIVE");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_user_binding
+                where tenant_id = ? and corp_id = ? and user_id_fingerprint = ?
+                  and account_id = ? and status <> 'REVOKED'
+                """, Integer.class, TENANT, CORP_ID, codec.fingerprint(userId), FRONT_ACCOUNT))
+                .isZero();
+    }
+
+    @Test
+    void assignmentUpdateAfterManualRevocationRequiresFreshIdentityAndNeverRevivesTransferHistory() {
+        String userId = "transfer-manual-revoke-assignment-" + UUID.randomUUID();
+        UUID transferredFromBindingId = UUID.randomUUID();
+        UUID transferCandidateId = UUID.randomUUID();
+        insertBinding(transferredFromBindingId, userId, FRONT_ACCOUNT, null);
+        insertCandidate(transferCandidateId, userId, "NEW_MEMBER", null, null,
+                "CONFLICT", FRONT_ACCOUNT, FRONT_DEPARTMENT, FRONT_POSITION);
+
+        ApprovalResponse transferred = inTransaction(() -> service.approve(
+                transferCandidateId, new DecisionRequest(0, "confirmed identity transfer", true)));
+        UUID manuallyRevokedAccountId = transferred.accountId();
+        UUID manuallyRevokedBindingId = uuidValue(
+                "select binding_id from wecom_person_onboarding where id = ?", transferCandidateId);
+        jdbc.update("""
+                update wecom_user_binding
+                set status = 'REVOKED', wecom_user_id = 'revoked:' || id::text,
+                    status_reason = 'MANUALLY_REVOKED', updated_by = ?,
+                    row_version = row_version + 1, updated_at = now()
+                where id = ?
+                """, CEO, manuallyRevokedBindingId);
+
+        OffsetDateTime changedAt = OffsetDateTime.now().plusMinutes(1);
+        WeComDirectoryEvent changed = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Employee after manual revocation", "1",
+                "new-department", "new-position", changedAt);
+        UUID receiptId = insertReceipt(changed, changedAt.plusSeconds(1));
+
+        assertThat(inTransaction(() -> lifecycleService().handleDirectoryEvent(
+                changed, receiptId, UUID.randomUUID()))).isTrue();
+
+        UUID freshCandidateId = uuidValue("""
+                select id from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ?
+                  and status = 'WAITING_PROFILE' and onboarding_kind = 'NEW_MEMBER'
+                """, CORP_ID, codec.fingerprint(userId));
+        assertThat(jdbc.queryForObject("""
+                select source_binding_id is null and source_account_id is null
+                       and identity_verified_at is null
+                       and requested_org_unit_id is null and requested_position_id is null
+                from wecom_person_onboarding where id = ?
+                """, Boolean.class, freshCandidateId)).isTrue();
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, transferredFromBindingId))
+                .containsEntry("status", "REVOKED")
+                .containsEntry("status_reason", "IDENTITY_TRANSFERRED_BY_ONBOARDING");
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, manuallyRevokedBindingId))
+                .containsEntry("status", "REVOKED")
+                .containsEntry("status_reason", "MANUALLY_REVOKED");
+
+        makeCandidateApprovable(
+                freshCandidateId, HOUSEKEEPING_DEPARTMENT, HOUSEKEEPING_POSITION);
+        long version = jdbc.queryForObject(
+                "select row_version from wecom_person_onboarding where id = ?",
+                Long.class, freshCandidateId);
+        ApprovalResponse approved = inTransaction(() -> service.approve(
+                freshCandidateId, new DecisionRequest(version, "fresh identity reviewed", false)));
+
+        assertThat(approved.accountId()).isNotIn(FRONT_ACCOUNT, manuallyRevokedAccountId);
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_user_binding
+                where tenant_id = ? and corp_id = ? and user_id_fingerprint = ?
+                  and status = 'ACTIVE' and account_id = ?
+                """, Integer.class, TENANT, CORP_ID, codec.fingerprint(userId), approved.accountId()))
+                .isOne();
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, transferredFromBindingId))
+                .containsEntry("status", "REVOKED")
+                .containsEntry("status_reason", "IDENTITY_TRANSFERRED_BY_ONBOARDING");
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, manuallyRevokedBindingId))
+                .containsEntry("status", "REVOKED")
+                .containsEntry("status_reason", "MANUALLY_REVOKED");
+    }
+
+    @Test
+    void sameSecondProfileAndDisabledUpdatesCreateDistinctReceiptsAndRemovalWins() {
+        String userId = "same-second-disable-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(
+                accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        OffsetDateTime occurredAt = OffsetDateTime.now().plusMinutes(1);
+        WeComDirectoryEvent profileUpdate = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Current profile", "1", "original-department", "original-position", occurredAt);
+        WeComDirectoryEvent disabledUpdate = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Current profile", "2", "original-department", "original-position", occurredAt);
+        WeComDirectoryEventReceiptStore receipts = new WeComDirectoryEventReceiptStore(
+                new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
+                properties, codec, new ObjectMapper().findAndRegisterModules());
+
+        WeComDirectoryEventReceiptStore.Reservation profileReceipt =
+                receipts.reserve(profileUpdate, UUID.randomUUID());
+        WeComDirectoryEventReceiptStore.Reservation disabledReceipt =
+                receipts.reserve(disabledUpdate, UUID.randomUUID());
+
+        assertThat(profileReceipt.duplicate()).isFalse();
+        assertThat(disabledReceipt.duplicate()).isFalse();
+        assertThat(disabledReceipt.id()).isNotEqualTo(profileReceipt.id());
+        assertThat(receipts.reserve(profileUpdate, UUID.randomUUID()))
+                .isEqualTo(new WeComDirectoryEventReceiptStore.Reservation(profileReceipt.id(), true));
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_directory_event_receipt
+                where tenant_id = ? and corp_id = ? and user_id_fingerprint = ?
+                """, Integer.class, TENANT, CORP_ID, codec.fingerprint(userId))).isEqualTo(2);
+
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                profileUpdate, profileReceipt.id(), UUID.randomUUID()))).isFalse();
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                disabledUpdate, disabledReceipt.id(), UUID.randomUUID()))).isTrue();
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "DIRECTORY_MEMBER_DISABLED");
+    }
+
+    @Test
+    void reusedIdentityCancelsTheOlderApplicationAndRequiresFreshVerificationAndSelection() {
+        String userId = "reuse-clears-old-application-" + UUID.randomUUID();
+        UUID oldBindingId = UUID.randomUUID();
+        UUID oldCandidateId = UUID.randomUUID();
+        insertBinding(oldBindingId, userId, FRONT_ACCOUNT, null);
+        insertCandidate(oldCandidateId, userId, "NEW_MEMBER", null, null,
+                "PENDING_APPROVAL", null, FRONT_DEPARTMENT, FRONT_POSITION);
+        jdbc.update("""
+                update wecom_person_onboarding
+                set invitation_token_hash = ?, invitation_issued_at = now(),
+                    invitation_expires_at = now() + interval '60 minutes',
+                    oauth_state_hash = ?, browser_verifier_hash = ?, provider_code_hash = ?,
+                    exchange_code_hash = ?, exchange_expires_at = now() + interval '5 minutes',
+                    session_token_hash = ?, session_expires_at = now() + interval '10 minutes'
+                where id = ?
+                """, WeComDirectorySecretCodec.sha256("old-invitation"),
+                WeComDirectorySecretCodec.sha256("old-state"),
+                WeComDirectorySecretCodec.sha256("old-verifier"),
+                WeComDirectorySecretCodec.sha256("old-provider-code"),
+                WeComDirectorySecretCodec.sha256("old-exchange"),
+                WeComDirectorySecretCodec.sha256("old-session"), oldCandidateId);
+        OffsetDateTime departedAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime reusedAt = departedAt.plusMinutes(1);
+        WeComDirectoryEvent delayedDelete = new WeComDirectoryEvent(
+                "change_contact", "delete_user", userId, null,
+                "Former employee", "5", null, null, departedAt);
+        WeComDirectoryEvent reusedCreate = new WeComDirectoryEvent(
+                "change_contact", "create_user", userId, null,
+                "Replacement employee", "1", null, null, reusedAt);
+        UUID deleteReceipt = insertReceipt(delayedDelete, departedAt.plusSeconds(1));
+        UUID createReceipt = insertReceipt(reusedCreate, reusedAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                reusedCreate, createReceipt, UUID.randomUUID()))).isTrue();
+
+        assertThat(jdbc.queryForMap("""
+                select status, user_id_ciphertext is null as identity_cleared,
+                       invitation_token_hash is null as invitation_cleared,
+                       oauth_state_hash is null and browser_verifier_hash is null
+                           and provider_code_hash is null as oauth_cleared,
+                       exchange_code_hash is null and session_token_hash is null
+                           as session_cleared,
+                       identity_verified_at is null and requested_org_unit_id is null
+                           and requested_position_id is null and profile_submitted_at is null
+                           and conflicting_account_id is null as profile_cleared
+                from wecom_person_onboarding where id = ?
+                """, oldCandidateId))
+                .containsEntry("status", "CANCELLED")
+                .containsEntry("identity_cleared", true)
+                .containsEntry("invitation_cleared", true)
+                .containsEntry("oauth_cleared", true)
+                .containsEntry("session_cleared", true)
+                .containsEntry("profile_cleared", true);
+        assertThatThrownBy(() -> inTransaction(() -> service.approve(
+                oldCandidateId, new DecisionRequest(1, "must not approve", false))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("当前状态不允许确认启用");
+
+        UUID freshCandidateId = uuidValue("""
+                select id from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ?
+                  and status = 'WAITING_PROFILE' and onboarding_kind = 'NEW_MEMBER'
+                """, CORP_ID, codec.fingerprint(userId));
+        assertThat(freshCandidateId).isNotEqualTo(oldCandidateId);
+        assertThat(jdbc.queryForMap("""
+                select identity_verified_at is null as not_verified,
+                       requested_org_unit_id is null and requested_position_id is null
+                           and profile_submitted_at is null as no_selection,
+                       conflicting_account_id is null as no_inherited_conflict,
+                       invitation_token_hash is not null as fresh_invitation,
+                       invitation_expires_at - invitation_issued_at <= interval '120 minutes 5 seconds'
+                           as bounded_invitation
+                from wecom_person_onboarding where id = ?
+                """, freshCandidateId))
+                .containsEntry("not_verified", true)
+                .containsEntry("no_selection", true)
+                .containsEntry("no_inherited_conflict", true)
+                .containsEntry("fresh_invitation", true)
+                .containsEntry("bounded_invitation", true);
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                delayedDelete, deleteReceipt, UUID.randomUUID()))).isFalse();
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ? and status = 'WAITING_PROFILE'
+                """, Integer.class, CORP_ID, codec.fingerprint(userId))).isOne();
+    }
+
+    @Test
+    void laterDeleteFollowsAnUnprocessedRenameAndSuspendsTheCanonicalBinding() {
+        assertLaterRemovalFollowsUnprocessedRename("delete_user", "5",
+                "DIRECTORY_MEMBER_DELETED");
+    }
+
+    @Test
+    void laterDisableFollowsAnUnprocessedRenameAndSuspendsTheCanonicalBinding() {
+        assertLaterRemovalFollowsUnprocessedRename("update_user", "2",
+                "DIRECTORY_MEMBER_DISABLED");
+    }
+
+    @Test
+    void chainedRenameProcessedNewestFirstStillReusesTheCanonicalAccount() {
+        String firstUserId = "rename-chain-a-" + UUID.randomUUID();
+        String secondUserId = "rename-chain-b-" + UUID.randomUUID();
+        String thirdUserId = "rename-chain-c-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId,
+                bindingId, firstUserId);
+        Counts before = identityCounts();
+        OffsetDateTime firstAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime secondAt = firstAt.plusMinutes(1);
+        WeComDirectoryEvent firstRename = new WeComDirectoryEvent(
+                "change_contact", "update_user", firstUserId, secondUserId,
+                "Existing employee", "1", null, null, firstAt);
+        WeComDirectoryEvent secondRename = new WeComDirectoryEvent(
+                "change_contact", "update_user", secondUserId, thirdUserId,
+                "Existing employee", "1", null, null, secondAt);
+        UUID firstReceipt = insertReceipt(firstRename, firstAt.plusSeconds(1));
+        UUID secondReceipt = insertReceipt(secondRename, secondAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                secondRename, secondReceipt, UUID.randomUUID()))).isTrue();
+        UUID candidateId = uuidValue("""
+                select id from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ? and status = 'WAITING_PROFILE'
+                """, CORP_ID, codec.fingerprint(thirdUserId));
+        assertThat(jdbc.queryForMap("""
+                select onboarding_kind, source_account_id, source_binding_id
+                from wecom_person_onboarding where id = ?
+                """, candidateId))
+                .containsEntry("onboarding_kind", "USER_ID_CHANGE")
+                .containsEntry("source_account_id", accountId)
+                .containsEntry("source_binding_id", bindingId);
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                firstRename, firstReceipt, UUID.randomUUID()))).isFalse();
+        makeCandidateApprovable(candidateId, HOUSEKEEPING_DEPARTMENT, HOUSEKEEPING_POSITION);
+        long version = jdbc.queryForObject(
+                "select row_version from wecom_person_onboarding where id = ?",
+                Long.class, candidateId);
+
+        ApprovalResponse approved = inTransaction(() -> service.approve(
+                candidateId, new DecisionRequest(version, "rename chain reviewed", false)));
+
+        assertThat(approved.accountId()).isEqualTo(accountId);
+        assertThat(identityCounts().accounts()).isEqualTo(before.accounts());
+        assertThat(jdbc.queryForMap("""
+                select account_id, wecom_user_id, user_id_fingerprint, status
+                from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("account_id", accountId)
+                .containsEntry("wecom_user_id", thirdUserId)
+                .containsEntry("user_id_fingerprint", codec.fingerprint(thirdUserId))
+                .containsEntry("status", "ACTIVE");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ? and onboarding_kind = 'NEW_MEMBER'
+                """, Integer.class, CORP_ID, codec.fingerprint(thirdUserId))).isZero();
+    }
+
+    @Test
+    void assignmentUpdateOnRenameDestinationReusesTheCanonicalAccount() {
+        String firstUserId = "rename-assignment-a-" + UUID.randomUUID();
+        String secondUserId = "rename-assignment-b-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId,
+                bindingId, firstUserId);
+        Counts before = identityCounts();
+        OffsetDateTime renameAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime assignmentAt = renameAt.plusMinutes(1);
+        WeComDirectoryEvent rename = new WeComDirectoryEvent(
+                "change_contact", "update_user", firstUserId, secondUserId,
+                "Existing employee", "1", null, null, renameAt);
+        WeComDirectoryEvent assignmentUpdate = new WeComDirectoryEvent(
+                "change_contact", "update_user", secondUserId, null,
+                "Existing employee", "1", "changed-department", "changed-position", assignmentAt);
+        UUID renameReceipt = insertReceipt(rename, renameAt.plusSeconds(1));
+        UUID assignmentReceipt = insertReceipt(assignmentUpdate, assignmentAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                assignmentUpdate, assignmentReceipt, UUID.randomUUID()))).isTrue();
+        UUID candidateId = uuidValue("""
+                select id from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ? and status = 'WAITING_PROFILE'
+                """, CORP_ID, codec.fingerprint(secondUserId));
+        assertThat(jdbc.queryForMap("""
+                select onboarding_kind, source_account_id, source_binding_id
+                from wecom_person_onboarding where id = ?
+                """, candidateId))
+                .containsEntry("onboarding_kind", "ASSIGNMENT_CHANGE")
+                .containsEntry("source_account_id", accountId)
+                .containsEntry("source_binding_id", bindingId);
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                rename, renameReceipt, UUID.randomUUID()))).isFalse();
+        makeCandidateApprovable(candidateId, HOUSEKEEPING_DEPARTMENT, HOUSEKEEPING_POSITION);
+        long version = jdbc.queryForObject(
+                "select row_version from wecom_person_onboarding where id = ?",
+                Long.class, candidateId);
+
+        ApprovalResponse approved = inTransaction(() -> service.approve(
+                candidateId, new DecisionRequest(version, "assignment reviewed", false)));
+
+        assertThat(approved.accountId()).isEqualTo(accountId);
+        assertThat(identityCounts().accounts()).isEqualTo(before.accounts());
+        assertThat(jdbc.queryForMap("""
+                select account_id, wecom_user_id, status from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("account_id", accountId)
+                .containsEntry("wecom_user_id", secondUserId)
+                .containsEntry("status", "ACTIVE");
+    }
+
+    @Test
+    void approvalFailsClosedWhenANewerDisabledReceiptIsAlreadyDurable() {
+        String userId = "approval-watermark-" + UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        OffsetDateTime candidateAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime disabledAt = candidateAt.plusMinutes(1);
+        WeComDirectoryEvent candidateEvent = new WeComDirectoryEvent(
+                "change_contact", "create_user", userId, null,
+                "Pending employee", "1", null, null, candidateAt);
+        WeComDirectoryEvent disabled = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Pending employee", "2", null, null, disabledAt);
+        UUID candidateReceipt = insertReceipt(candidateEvent, candidateAt.plusSeconds(1));
+        jdbc.update("""
+                update wecom_directory_event_receipt
+                set status = 'SUCCEEDED', processed_at = now(), payload_ciphertext = ''
+                where id = ?
+                """,
+                candidateReceipt);
+        insertCandidate(candidateId, userId, "NEW_MEMBER", null, null,
+                "PENDING_APPROVAL", null, FRONT_DEPARTMENT, FRONT_POSITION);
+        jdbc.update("""
+                update wecom_person_onboarding
+                set last_event_at = ?, last_event_receipt_id = ? where id = ?
+                """, candidateAt, candidateReceipt, candidateId);
+        insertReceipt(disabled, disabledAt.plusSeconds(1));
+        Counts before = identityCounts();
+
+        assertThatThrownBy(() -> inTransaction(() -> service.approve(
+                candidateId, new DecisionRequest(0, "must not approve", false))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("正在同步");
+
+        assertThat(identityCounts()).isEqualTo(before);
+        assertThat(jdbc.queryForObject(
+                "select status from wecom_person_onboarding where id = ?",
+                String.class, candidateId)).isEqualTo("PENDING_APPROVAL");
+    }
+
+    @Test
+    void retryAndRegenerateCancelOldApplicationsWhenANewerCreateIsDurable() {
+        UUID retryCandidate = insertSupersededInvitationCandidate(
+                "retry-superseded-" + UUID.randomUUID(), "WAITING_PROFILE",
+                "WECOM_OAUTH_TECHNICAL_FAILURE");
+        InvitationActionResponse retryResponse = inTransaction(() -> service.retryTechnicalFailure(
+                retryCandidate, new RetryRequest(0, "retry old invitation")));
+        assertThat(retryResponse.status()).isEqualTo("CANCELLED");
+        assertCancelledWithoutIdentityOrInvitation(retryCandidate);
+
+        UUID expiredCandidate = insertSupersededInvitationCandidate(
+                "expired-superseded-" + UUID.randomUUID(), "EXPIRED",
+                "INVITATION_EXPIRED");
+        InvitationActionResponse regenerateResponse = inTransaction(() -> service.regenerateInvitation(
+                expiredCandidate, new RetryRequest(0, "regenerate old invitation")));
+        assertThat(regenerateResponse.status()).isEqualTo("CANCELLED");
+        assertCancelledWithoutIdentityOrInvitation(expiredCandidate);
+        verify(employeeService, never()).newInvitationToken();
+    }
+
+    @Test
+    void confirmedConflictTransferRequiresANonBlankServerSideReason() {
+        String userId = "transfer-reason-" + UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        insertBinding(bindingId, userId, FRONT_ACCOUNT, null);
+        insertCandidate(candidateId, userId, "NEW_MEMBER", null, null,
+                "CONFLICT", FRONT_ACCOUNT, FRONT_DEPARTMENT, FRONT_POSITION);
+        Counts before = identityCounts();
+
+        assertThatThrownBy(() -> inTransaction(() -> service.approve(
+                candidateId, new DecisionRequest(0, "   ", true))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("必须填写确认原因");
+
+        assertThat(identityCounts()).isEqualTo(before);
+        assertThat(jdbc.queryForObject(
+                "select status from wecom_person_onboarding where id = ?", String.class, candidateId))
+                .isEqualTo("CONFLICT");
+        assertThat(uuidValue("select account_id from wecom_user_binding where id = ?", bindingId))
+                .isEqualTo(FRONT_ACCOUNT);
+    }
+
+    @Test
+    void failureOnFinalCandidateUpdateRollsBackTheEntireIdentityChain() {
+        String userId = "forced-rollback-" + UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        insertCandidate(candidateId, userId, "NEW_MEMBER", null, null,
+                "PENDING_APPROVAL", null, FRONT_DEPARTMENT, FRONT_POSITION);
+        Counts before = identityCounts();
+
+        String triggerName = "trg_test_wecom_approval_rollback";
+        String functionName = "test_wecom_approval_rollback";
+        jdbc.execute("drop trigger if exists " + triggerName + " on wecom_person_onboarding");
+        jdbc.execute("drop function if exists " + functionName + "()");
+        jdbc.execute("""
+                create function %s() returns trigger language plpgsql as $$
+                begin
+                    if new.id = '%s'::uuid and new.status = 'APPROVED' then
+                        raise exception 'forced approval rollback';
+                    end if;
+                    return new;
+                end
+                $$
+                """.formatted(functionName, candidateId));
+        jdbc.execute("create trigger " + triggerName
+                + " before update on wecom_person_onboarding for each row execute function "
+                + functionName + "()");
+
+        try {
+            assertThatThrownBy(() -> inTransaction(() -> service.approve(
+                    candidateId, new DecisionRequest(0, "must roll back", false))))
+                    .isInstanceOf(DataAccessException.class)
+                    .hasMessageContaining("forced approval rollback");
+        } finally {
+            jdbc.execute("drop trigger if exists " + triggerName + " on wecom_person_onboarding");
+            jdbc.execute("drop function if exists " + functionName + "()");
+        }
+
+        Counts after = identityCounts();
+        assertThat(after).isEqualTo(before);
+        assertThat(jdbc.queryForObject(
+                "select status from wecom_person_onboarding where id = ?", String.class, candidateId))
+                .isEqualTo("PENDING_APPROVAL");
+        assertThat(jdbc.queryForObject(
+                "select account_id is null and employee_id is null and assignment_id is null "
+                        + "and role_assignment_id is null and binding_id is null "
+                        + "and user_id_ciphertext is not null "
+                        + "from wecom_person_onboarding where id = ?",
+                Boolean.class, candidateId)).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from wecom_user_binding where tenant_id = ? and corp_id = ? and wecom_user_id = ?",
+                Integer.class, TENANT, CORP_ID, userId)).isZero();
+    }
+
+    @Test
+    void assignmentChangeReusesAccountAndEmployeeAndRetiresTheOldAssignmentAndRole() {
+        String userId = "assignment-change-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID oldAssignmentId = UUID.randomUUID();
+        UUID oldRoleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, oldAssignmentId, oldRoleAssignmentId,
+                bindingId, userId);
+        insertCandidate(candidateId, userId, "ASSIGNMENT_CHANGE", bindingId, accountId,
+                "PENDING_APPROVAL", null, HOUSEKEEPING_DEPARTMENT, HOUSEKEEPING_POSITION);
+        UUID manualGrantId = UUID.randomUUID();
+        jdbc.update("""
+                insert into role_assignment
+                    (id, tenant_id, account_id, role_id, scope_org_unit_id,
+                     scope_type, valid_from, granted_by)
+                select ?, ?, ?, profile.default_role_id, ?, 'ORG_UNIT', now(), ?
+                from position_function_profile profile
+                where profile.tenant_id = ? and profile.position_id = ?
+                  and profile.scope_type = 'GROUP'
+                """, manualGrantId, TENANT, accountId, FRONT_DEPARTMENT, CEO, TENANT, FRONT_POSITION);
+        Counts before = identityCounts();
+
+        ApprovalResponse response = inTransaction(() -> service.approve(
+                candidateId, new DecisionRequest(0, "assignment approved", false)));
+
+        assertThat(response.status()).isEqualTo("APPROVED");
+        assertThat(response.accountId()).isEqualTo(accountId);
+        Counts after = identityCounts();
+        assertThat(after.accounts() - before.accounts()).isZero();
+        assertThat(after.employees() - before.employees()).isZero();
+        assertThat(after.assignments() - before.assignments()).isOne();
+        assertThat(after.roles() - before.roles()).isOne();
+        assertThat(after.bindings() - before.bindings()).isZero();
+
+        assertThat(jdbc.queryForMap(
+                "select status, is_primary, valid_to is not null as ended "
+                        + "from employee_position_assignment where id = ?", oldAssignmentId))
+                .containsEntry("status", "INACTIVE")
+                .containsEntry("is_primary", false)
+                .containsEntry("ended", true);
+        assertThat(jdbc.queryForObject(
+                "select valid_to is not null from role_assignment where id = ?",
+                Boolean.class, oldRoleAssignmentId)).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select valid_to is null from role_assignment where id = ?",
+                Boolean.class, manualGrantId)).isTrue();
+
+        UUID newAssignmentId = uuidValue(
+                "select assignment_id from wecom_person_onboarding where id = ?", candidateId);
+        UUID newRoleAssignmentId = uuidValue(
+                "select role_assignment_id from wecom_person_onboarding where id = ?", candidateId);
+        assertThat(newAssignmentId).isNotEqualTo(oldAssignmentId);
+        assertThat(newRoleAssignmentId).isNotEqualTo(oldRoleAssignmentId);
+        assertThat(jdbc.queryForObject(
+                "select employee_id = ? and org_unit_id = ? and position_id = ? "
+                        + "and status = 'ACTIVE' and is_primary "
+                        + "from employee_position_assignment where id = ?",
+                Boolean.class, employeeId, HOUSEKEEPING_DEPARTMENT,
+                HOUSEKEEPING_POSITION, newAssignmentId)).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select account_id = ? and preferred_assignment_id = ? and status = 'ACTIVE' "
+                        + "and row_version = 1 from wecom_user_binding where id = ?",
+                Boolean.class, accountId, newAssignmentId, bindingId)).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select account_id = ? and employee_id = ? and binding_id = ? "
+                        + "from wecom_person_onboarding where id = ?",
+                Boolean.class, accountId, employeeId, bindingId, candidateId)).isTrue();
+    }
+
+    @Test
+    void technicalRetryRotatesTheInvitationWithoutReturningItsSecret() {
+        String userId = "technical-retry-" + UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        insertCandidate(candidateId, userId, "NEW_MEMBER", null, null,
+                "WAITING_PROFILE", null, null, null);
+        jdbc.update("""
+                update wecom_person_onboarding
+                set failure_code = 'INVITATION_DELIVERY_FAILED'
+                where id = ?
+                """, candidateId);
+
+        InvitationActionResponse response = inTransaction(() -> service.retryTechnicalFailure(
+                candidateId, new RetryRequest(0, "retry provider delivery")));
+
+        assertThat(response.status()).isEqualTo("WAITING_PROFILE");
+        assertThat(response.invitationExpiresAt()).isNotNull();
+        assertThat(response.message()).doesNotContain("integration-");
+        assertThat(jdbc.queryForObject("""
+                select invitation_token_hash ~ '^[0-9a-f]{64}$' and invitation_expires_at is not null
+                       and failure_code is null and row_version = 1
+                from wecom_person_onboarding where id = ?
+                """, Boolean.class, candidateId)).isTrue();
+        verify(employeeService).deliverInvitationAfterCommit(
+                org.mockito.ArgumentMatchers.eq(candidateId),
+                org.mockito.ArgumentMatchers.eq(userId), anyString());
+    }
+
+    @Test
+    void expiredInvitationCanOnlyBeRegeneratedAsANewCredential() {
+        String userId = "expired-regenerate-" + UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        insertCandidate(candidateId, userId, "NEW_MEMBER", null, null,
+                "WAITING_PROFILE", null, null, null);
+        jdbc.update("""
+                update wecom_person_onboarding
+                set status = 'EXPIRED', expired_at = now(),
+                    failure_code = 'INVITATION_EXPIRED', row_version = row_version + 1
+                where id = ?
+                """, candidateId);
+
+        InvitationActionResponse response = inTransaction(() -> service.regenerateInvitation(
+                candidateId, new RetryRequest(1, "employee still needs access")));
+
+        assertThat(response.status()).isEqualTo("WAITING_PROFILE");
+        assertThat(response.rowVersion()).isEqualTo(2);
+        assertThat(jdbc.queryForObject("""
+                select expired_at is null and invitation_token_hash ~ '^[0-9a-f]{64}$'
+                       and invitation_issued_at is not null and invitation_expires_at is not null
+                       and failure_code is null and row_version = 2
+                from wecom_person_onboarding where id = ?
+                """, Boolean.class, candidateId)).isTrue();
+        verify(employeeService).deliverInvitationAfterCommit(
+                org.mockito.ArgumentMatchers.eq(candidateId),
+                org.mockito.ArgumentMatchers.eq(userId), anyString());
+    }
+
+    @Test
+    void expiredInvitationRegenerationRejectsANewerOpenCandidateExplicitly() {
+        String userId = "expired-with-newer-" + UUID.randomUUID();
+        UUID expiredId = UUID.randomUUID();
+        UUID newerId = UUID.randomUUID();
+        insertCandidate(expiredId, userId, "NEW_MEMBER", null, null,
+                "WAITING_PROFILE", null, null, null);
+        jdbc.update("""
+                update wecom_person_onboarding
+                set status = 'EXPIRED', expired_at = now(),
+                    failure_code = 'INVITATION_EXPIRED', row_version = row_version + 1
+                where id = ?
+                """, expiredId);
+        insertCandidate(newerId, userId, "NEW_MEMBER", null, null,
+                "WAITING_PROFILE", null, null, null);
+
+        assertThatThrownBy(() -> inTransaction(() -> service.regenerateInvitation(
+                expiredId, new RetryRequest(1, "try stale invitation"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("已有更新的申请");
+        assertThat(jdbc.queryForObject(
+                "select status from wecom_person_onboarding where id = ?", String.class, expiredId))
+                .isEqualTo("EXPIRED");
+        assertThat(jdbc.queryForObject(
+                "select status from wecom_person_onboarding where id = ?", String.class, newerId))
+                .isEqualTo("WAITING_PROFILE");
+    }
+
+    @Test
+    void dueInvitationExpiresPersistentlyAndClearsEveryTemporaryCredential() {
+        String userId = "scheduled-expiry-" + UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        insertCandidate(candidateId, userId, "NEW_MEMBER", null, null,
+                "WAITING_PROFILE", null, null, null);
+        jdbc.update("""
+                update wecom_person_onboarding
+                set invitation_token_hash = ?, invitation_issued_at = now() - interval '121 minutes',
+                    invitation_expires_at = now() - interval '1 minute',
+                    oauth_state_hash = ?, browser_verifier_hash = ?, provider_code_hash = ?,
+                    exchange_code_hash = ?, exchange_expires_at = now() + interval '1 minute',
+                    session_token_hash = ?, session_expires_at = now() + interval '10 minutes'
+                where id = ?
+                """, WeComDirectorySecretCodec.sha256("expired-token"),
+                WeComDirectorySecretCodec.sha256("state"),
+                WeComDirectorySecretCodec.sha256("verifier"),
+                WeComDirectorySecretCodec.sha256("provider"),
+                WeComDirectorySecretCodec.sha256("exchange"),
+                WeComDirectorySecretCodec.sha256("session"), candidateId);
+        WeComDirectoryOnboardingService lifecycle = new WeComDirectoryOnboardingService(
+                new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
+                properties, codec, mock(WeComApiClient.class), new ObjectMapper(), transactionManager);
+
+        int expired = inTransaction(lifecycle::expireDueInvitations);
+
+        assertThat(expired).isGreaterThanOrEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                select status = 'EXPIRED' and expired_at is not null
+                       and user_id_ciphertext is not null
+                       and invitation_token_hash is null and invitation_issued_at is null
+                       and invitation_expires_at is null and oauth_state_hash is null
+                       and browser_verifier_hash is null and provider_code_hash is null
+                       and exchange_code_hash is null and exchange_expires_at is null
+                       and session_token_hash is null and session_expires_at is null
+                       and failure_code = 'INVITATION_EXPIRED'
+                from wecom_person_onboarding where id = ?
+                """, Boolean.class, candidateId)).isTrue();
+    }
+
+    @Test
+    void deadLetterRetryUsesOptimisticLockAndRequeuesOnlyTheEncryptedReceipt() {
+        UUID receiptId = UUID.randomUUID();
+        UUID correlationId = UUID.randomUUID();
+        jdbc.update("""
+                insert into wecom_directory_event_receipt
+                    (id, tenant_id, corp_id, event_key_hash, payload_hash,
+                     payload_ciphertext, event_type, change_type, event_priority,
+                     user_id_fingerprint, occurred_at, status, correlation_id,
+                     attempt_count, last_attempt_at, processed_at, last_error_code)
+                values (?, ?, ?, ?, ?, ?, 'change_contact', 'update_user', 40,
+                        ?, now(), 'DEAD_LETTER', ?, 8, now(), now(), 'TEST_FAILURE')
+                """, receiptId, TENANT, CORP_ID,
+                WeComDirectorySecretCodec.sha256("event:" + receiptId),
+                WeComDirectorySecretCodec.sha256("payload:" + receiptId),
+                codec.encrypt("safe encrypted retry payload"),
+                codec.fingerprint("dead-letter-user-" + receiptId), correlationId);
+
+        var listing = inTransaction(() -> service.listDirectoryEvents(null));
+        assertThat(listing.items()).anySatisfy(row -> {
+            assertThat(row.id()).isEqualTo(receiptId);
+            assertThat(row.status()).isEqualTo("DEAD_LETTER");
+            assertThat(row.lastErrorCode()).isEqualTo("TEST_FAILURE");
+            assertThat(row.suggestedAction()).contains("无需登录服务器");
+        });
+
+        DirectoryEventRetryResponse response = inTransaction(() -> service.retryDirectoryEvent(
+                receiptId, new RetryRequest(0, "retry technical dead letter")));
+
+        assertThat(response.status()).isEqualTo("PROCESSING");
+        assertThat(response.rowVersion()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                select status = 'PROCESSING' and attempt_count = 0
+                       and last_attempt_at is null and processed_at is null
+                       and last_error_code is null and payload_ciphertext <> ''
+                from wecom_directory_event_receipt where id = ?
+                """, Boolean.class, receiptId)).isTrue();
+        verify(eventProcessor).processNew(receiptId, correlationId);
+        assertThatThrownBy(() -> inTransaction(() -> service.retryDirectoryEvent(
+                receiptId, new RetryRequest(0, "stale duplicate"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("仅死信状态");
+    }
+
+    @Test
+    void delayedRenameDoesNotSuspendAReusedIdentityApprovedByANewerDirectoryFact() {
+        String oldUserId = "reuse-old-" + UUID.randomUUID();
+        String newUserId = "rename-new-" + UUID.randomUUID();
+        UUID sourceAccount = UUID.randomUUID();
+        UUID sourceEmployee = UUID.randomUUID();
+        UUID sourceAssignment = UUID.randomUUID();
+        UUID sourceRole = UUID.randomUUID();
+        UUID sourceBinding = UUID.randomUUID();
+        insertSourceIdentity(sourceAccount, sourceEmployee, sourceAssignment, sourceRole,
+                sourceBinding, oldUserId);
+
+        OffsetDateTime renameAt = OffsetDateTime.now().minusMinutes(2);
+        OffsetDateTime reuseAt = renameAt.plusMinutes(1);
+        jdbc.update("update wecom_user_binding set last_verified_at = ? where id = ?",
+                renameAt.minusMinutes(1), sourceBinding);
+        WeComDirectoryEvent rename = new WeComDirectoryEvent(
+                "change_contact", "update_user", oldUserId, newUserId,
+                "Original employee", "1", null, null, renameAt);
+        WeComDirectoryEvent reuse = new WeComDirectoryEvent(
+                "change_contact", "create_user", oldUserId, null,
+                "Replacement employee", "1", null, null, reuseAt);
+        UUID renameReceipt = insertReceipt(rename, renameAt.plusSeconds(1));
+        UUID reuseReceipt = insertReceipt(reuse, reuseAt.plusSeconds(1));
+
+        UUID replacementCandidate = UUID.randomUUID();
+        insertCandidate(replacementCandidate, oldUserId, "NEW_MEMBER", null, null,
+                "CONFLICT", sourceAccount, FRONT_DEPARTMENT, FRONT_POSITION);
+        jdbc.update("""
+                update wecom_person_onboarding
+                set last_event_at = ?, last_event_receipt_id = ?
+                where id = ?
+                """, reuseAt, reuseReceipt, replacementCandidate);
+        ApprovalResponse replacement = inTransaction(() -> service.approve(
+                replacementCandidate, new DecisionRequest(0, "confirmed reused identity", true)));
+        UUID replacementBinding = uuidValue(
+                "select binding_id from wecom_person_onboarding where id = ?", replacementCandidate);
+        assertThat(replacement.accountId()).isNotEqualTo(sourceAccount);
+        assertThat(jdbc.queryForObject("""
+                select status = 'ACTIVE' and identity_event_receipt_id = ?
+                from wecom_user_binding where id = ?
+                """, Boolean.class, reuseReceipt, replacementBinding)).isTrue();
+
+        WeComDirectoryOnboardingService lifecycle = new WeComDirectoryOnboardingService(
+                new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
+                properties, codec, mock(WeComApiClient.class), new ObjectMapper(), transactionManager);
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                rename, renameReceipt, UUID.randomUUID()))).isTrue();
+
+        assertThat(jdbc.queryForObject(
+                "select status from wecom_user_binding where id = ?",
+                String.class, replacementBinding)).isEqualTo("ACTIVE");
+        assertThat(jdbc.queryForObject("""
+                select count(*)
+                from wecom_person_onboarding
+                where tenant_id = ? and corp_id = ? and user_id_fingerprint = ?
+                  and onboarding_kind = 'USER_ID_CHANGE' and source_account_id = ?
+                  and status = 'WAITING_PROFILE'
+                """, Integer.class, TENANT, CORP_ID, codec.fingerprint(newUserId), sourceAccount)).isOne();
+        assertThat(jdbc.queryForObject(
+                "select status from wecom_person_onboarding where id = ?",
+                String.class, replacementCandidate)).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void directorySuspensionDoesNotOverwriteAnExistingManualSuspensionReasonOrActor() {
+        String userId = "manual-suspension-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        jdbc.update("""
+                update wecom_user_binding
+                set status = 'SUSPENDED', status_reason = 'MANUAL_REVIEW_PRIVATE_REASON',
+                    updated_by = ?, row_version = 7
+                where id = ?
+                """, CEO, bindingId);
+        OffsetDateTime occurredAt = OffsetDateTime.now();
+        WeComDirectoryEvent disabled = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Disabled employee", "2", null, null, occurredAt);
+        UUID receiptId = insertReceipt(disabled, occurredAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = new WeComDirectoryOnboardingService(
+                new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
+                properties, codec, mock(WeComApiClient.class), new ObjectMapper(), transactionManager);
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                disabled, receiptId, UUID.randomUUID()))).isTrue();
+
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason, updated_by, row_version
+                from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "MANUAL_REVIEW_PRIVATE_REASON")
+                .containsEntry("updated_by", CEO)
+                .containsEntry("row_version", 7L);
+    }
+
+    @Test
+    void disabledThenReenabledMemberKeepsTheOriginalAccountAndRequiresManualResume() {
+        String userId = "reenabled-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        Counts before = identityCounts();
+        OffsetDateTime disabledAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime enabledAt = disabledAt.plusMinutes(1);
+        WeComDirectoryEvent disabled = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Existing employee", "2", null, null, disabledAt);
+        WeComDirectoryEvent enabled = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Existing employee", "1", null, null, enabledAt);
+        UUID disabledReceipt = insertReceipt(disabled, disabledAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                disabled, disabledReceipt, UUID.randomUUID()))).isTrue();
+        UUID enabledReceipt = insertReceipt(enabled, enabledAt.plusSeconds(1));
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                enabled, enabledReceipt, UUID.randomUUID()))).isTrue();
+
+        UUID candidateId = uuidValue("""
+                select id from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ? and status = 'WAITING_PROFILE'
+                """, CORP_ID, codec.fingerprint(userId));
+        assertThat(jdbc.queryForMap("""
+                select onboarding_kind, source_account_id, source_binding_id
+                from wecom_person_onboarding where id = ?
+                """, candidateId))
+                .containsEntry("onboarding_kind", "ASSIGNMENT_CHANGE")
+                .containsEntry("source_account_id", accountId)
+                .containsEntry("source_binding_id", bindingId);
+        makeCandidateApprovable(candidateId, FRONT_DEPARTMENT, FRONT_POSITION);
+        long version = jdbc.queryForObject(
+                "select row_version from wecom_person_onboarding where id = ?", Long.class, candidateId);
+
+        ApprovalResponse approved = inTransaction(() -> service.approve(
+                candidateId, new DecisionRequest(version, "reactivation reviewed", false)));
+
+        assertThat(approved.accountId()).isEqualTo(accountId);
+        assertThat(approved.bindingStatus()).isEqualTo("SUSPENDED");
+        Counts after = identityCounts();
+        assertThat(after.accounts() - before.accounts()).isZero();
+        assertThat(after.employees() - before.employees()).isZero();
+        assertThat(jdbc.queryForMap("""
+                select account_id, status, status_reason
+                from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("account_id", accountId)
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "DIRECTORY_MEMBER_DISABLED");
+    }
+
+    @Test
+    void manualSuspensionSurvivesDirectoryAssignmentApproval() {
+        String userId = "manual-hold-change-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        jdbc.update("""
+                update wecom_user_binding
+                set status = 'SUSPENDED', status_reason = 'MANUAL_RISK_HOLD',
+                    updated_by = ?, row_version = 4
+                where id = ?
+                """, CEO, bindingId);
+        OffsetDateTime changedAt = OffsetDateTime.now().plusSeconds(1);
+        WeComDirectoryEvent changed = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Existing employee", "1", "department changed", null, changedAt);
+        UUID receiptId = insertReceipt(changed, changedAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                changed, receiptId, UUID.randomUUID()))).isTrue();
+        UUID candidateId = uuidValue("""
+                select id from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ? and status = 'WAITING_PROFILE'
+                """, CORP_ID, codec.fingerprint(userId));
+        makeCandidateApprovable(candidateId, HOUSEKEEPING_DEPARTMENT, HOUSEKEEPING_POSITION);
+        long version = jdbc.queryForObject(
+                "select row_version from wecom_person_onboarding where id = ?", Long.class, candidateId);
+
+        ApprovalResponse approved = inTransaction(() -> service.approve(
+                candidateId, new DecisionRequest(version, "assignment reviewed", false)));
+
+        assertThat(approved.accountId()).isEqualTo(accountId);
+        assertThat(approved.bindingStatus()).isEqualTo("SUSPENDED");
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason, updated_by
+                from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "MANUAL_RISK_HOLD")
+                .containsEntry("updated_by", CEO);
+    }
+
+    @Test
+    void delayedDeleteFollowedByIdentifierReuseCreatesAConflictCandidateAndSuspendsOldIdentity() {
+        String userId = "delete-reuse-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        OffsetDateTime deletedAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime recreatedAt = deletedAt.plusMinutes(1);
+        WeComDirectoryEvent deleted = new WeComDirectoryEvent(
+                "change_contact", "delete_user", userId, null,
+                "Departed employee", null, null, null, deletedAt);
+        WeComDirectoryEvent recreated = new WeComDirectoryEvent(
+                "change_contact", "create_user", userId, null,
+                "Replacement employee", "1", null, null, recreatedAt);
+        UUID deleteReceipt = insertReceipt(deleted, deletedAt.plusSeconds(1));
+        UUID createReceipt = insertReceipt(recreated, recreatedAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                recreated, createReceipt, UUID.randomUUID()))).isTrue();
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                deleted, deleteReceipt, UUID.randomUUID()))).isFalse();
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason, identity_event_receipt_id
+                from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "DIRECTORY_IDENTITY_REUSED")
+                .containsEntry("identity_event_receipt_id", createReceipt);
+
+        UUID candidateId = uuidValue("""
+                select id from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ? and status = 'WAITING_PROFILE'
+                """, CORP_ID, codec.fingerprint(userId));
+        String session = "session-" + UUID.randomUUID();
+        jdbc.update("""
+                update wecom_person_onboarding
+                set session_token_hash = ?, session_expires_at = now() + interval '10 minutes',
+                    identity_verified_at = now()
+                where id = ?
+                """, WeComDirectorySecretCodec.sha256(session), candidateId);
+        long version = jdbc.queryForObject(
+                "select row_version from wecom_person_onboarding where id = ?", Long.class, candidateId);
+
+        SubmitResponse submitted = inTransaction(() -> lifecycle.submit(new SubmitRequest(
+                session, FRONT_DEPARTMENT, FRONT_POSITION, version)));
+
+        assertThat(submitted.status()).isEqualTo("CONFLICT");
+        assertThat(jdbc.queryForObject(
+                "select conflicting_account_id from wecom_person_onboarding where id = ?",
+                UUID.class, candidateId)).isEqualTo(accountId);
+    }
+
+    @Test
+    void reconciliationNeverAutomaticallyReactivatesAnAssignmentSuspendedBinding() {
+        String userId = "reconcile-manual-resume-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        jdbc.update("update employee_position_assignment set status = 'INACTIVE' where id = ?", assignmentId);
+        WeComProperties weComProperties = mock(WeComProperties.class);
+        when(weComProperties.tenantId()).thenReturn(TENANT);
+        when(weComProperties.corpId()).thenReturn(CORP_ID);
+        WeComBindingReconciliationWorker worker = new WeComBindingReconciliationWorker(
+                new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
+                weComProperties, new ObjectMapper());
+
+        inTransaction(() -> { worker.reconcile(); return true; });
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "ACCOUNT_OR_ASSIGNMENT_INACTIVE");
+
+        jdbc.update("update employee_position_assignment set status = 'ACTIVE' where id = ?", assignmentId);
+        inTransaction(() -> { worker.reconcile(); return true; });
+
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason, preferred_assignment_id,
+                       assignment_selection_required
+                from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "ACCOUNT_OR_ASSIGNMENT_INACTIVE")
+                .containsEntry("preferred_assignment_id", assignmentId)
+                .containsEntry("assignment_selection_required", false);
+    }
+
+    @Test
+    void unchangedPopulatedAssignmentSnapshotOnlyRefreshesTheDisplayName() {
+        String userId = "unchanged-snapshot-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        OffsetDateTime occurredAt = OffsetDateTime.now().plusSeconds(1);
+        WeComDirectoryEvent unchanged = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Refreshed employee name", "1",
+                "original-department", "original-position", occurredAt);
+        UUID receiptId = insertReceipt(unchanged, occurredAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                unchanged, receiptId, UUID.randomUUID()))).isTrue();
+
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, bindingId)).containsEntry("status", "ACTIVE").containsEntry("status_reason", null);
+        assertThat(jdbc.queryForObject(
+                "select display_name from user_account where id = ?", String.class, accountId))
+                .isEqualTo("Refreshed employee name");
+        assertThat(jdbc.queryForObject(
+                "select name from employee where id = ?", String.class, employeeId))
+                .isEqualTo("Refreshed employee name");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ?
+                """, Integer.class, CORP_ID, codec.fingerprint(userId))).isZero();
+    }
+
+    @Test
+    void missingAssignmentSnapshotBaselineFailsClosedIntoReviewedChange() {
+        String userId = "missing-snapshot-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        jdbc.update("update wecom_user_binding set directory_assignment_snapshot_hash = null where id = ?",
+                bindingId);
+        OffsetDateTime occurredAt = OffsetDateTime.now().plusSeconds(1);
+        WeComDirectoryEvent populated = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Existing employee", "1",
+                "original-department", "original-position", occurredAt);
+        UUID receiptId = insertReceipt(populated, occurredAt.plusSeconds(1));
+
+        assertThat(inTransaction(() -> lifecycleService().handleDirectoryEvent(
+                populated, receiptId, UUID.randomUUID()))).isTrue();
+
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "DIRECTORY_ASSIGNMENT_CHANGED");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ?
+                  and onboarding_kind = 'ASSIGNMENT_CHANGE' and status = 'WAITING_PROFILE'
+                """, Integer.class, CORP_ID, codec.fingerprint(userId))).isOne();
+    }
+
+    @Test
+    void delayedDisableFollowedByIdentifierReuseCreatesANewMemberCandidate() {
+        String userId = "disable-reuse-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId, bindingId, userId);
+        OffsetDateTime disabledAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime recreatedAt = disabledAt.plusMinutes(1);
+        WeComDirectoryEvent disabled = new WeComDirectoryEvent(
+                "change_contact", "update_user", userId, null,
+                "Departed employee", "2", null, null, disabledAt);
+        WeComDirectoryEvent recreated = new WeComDirectoryEvent(
+                "change_contact", "create_user", userId, null,
+                "Replacement employee", "1", null, null, recreatedAt);
+        UUID disableReceipt = insertReceipt(disabled, disabledAt.plusSeconds(1));
+        UUID createReceipt = insertReceipt(recreated, recreatedAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                recreated, createReceipt, UUID.randomUUID()))).isTrue();
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                disabled, disableReceipt, UUID.randomUUID()))).isFalse();
+
+        assertThat(jdbc.queryForMap("""
+                select status, status_reason from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", "DIRECTORY_IDENTITY_REUSED");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_person_onboarding
+                where corp_id = ? and user_id_fingerprint = ?
+                  and onboarding_kind = 'NEW_MEMBER' and status = 'WAITING_PROFILE'
+                """, Integer.class, CORP_ID, codec.fingerprint(userId))).isOne();
+    }
+
+    private void publishSelectableProfile(UUID positionId) {
+        int published = jdbc.update("""
+                update position_function_profile_version version
+                set lifecycle_status = 'PUBLISHED', authorization_scope_type = 'ORG_UNIT',
+                    wecom_self_selectable = true, published_by = ?, published_at = now()
+                from position_function_profile profile
+                where version.tenant_id = profile.tenant_id and version.profile_id = profile.id
+                  and profile.tenant_id = ? and profile.position_id = ?
+                  and profile.scope_type = 'GROUP' and version.lifecycle_status = 'DRAFT'
+                """, CEO, TENANT, positionId);
+        if (published == 0) {
+            assertThat(jdbc.queryForObject("""
+                    select count(*) from position_function_profile_version version
+                    join position_function_profile profile
+                      on profile.tenant_id = version.tenant_id and profile.id = version.profile_id
+                    where profile.tenant_id = ? and profile.position_id = ?
+                      and profile.scope_type = 'GROUP' and version.lifecycle_status = 'PUBLISHED'
+                      and version.wecom_self_selectable = true
+                    """, Integer.class, TENANT, positionId)).isOne();
+        }
+    }
+
+    private WeComDirectoryOnboardingService lifecycleService() {
+        return new WeComDirectoryOnboardingService(
+                new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
+                properties, codec, mock(WeComApiClient.class), new ObjectMapper(), transactionManager);
+    }
+
+    private void makeCandidateApprovable(UUID candidateId, UUID orgUnitId, UUID positionId) {
+        jdbc.update("""
+                update wecom_person_onboarding
+                set status = 'PENDING_APPROVAL', requested_org_unit_id = ?,
+                    requested_position_id = ?, identity_verified_at = now(),
+                    profile_submitted_at = now()
+                where id = ?
+                """, orgUnitId, positionId, candidateId);
+    }
+
+    private void insertBinding(UUID bindingId, String userId, UUID accountId, UUID assignmentId) {
+        jdbc.update("""
+                insert into wecom_user_binding
+                    (id, tenant_id, corp_id, wecom_user_id, user_id_fingerprint,
+                     account_id, preferred_assignment_id, status, last_verified_at,
+                     assignment_snapshot_hash, directory_assignment_snapshot_hash,
+                     assignment_selection_required, updated_by)
+                values (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', now(), ?, ?, false, ?)
+                """, bindingId, TENANT, CORP_ID, userId, codec.fingerprint(userId),
+                accountId, assignmentId,
+                assignmentId == null ? null : WeComDirectorySecretCodec.sha256(assignmentId.toString()),
+                WeComDirectorySecretCodec.sha256("original-department|original-position"),
+                CEO);
+    }
+
+    private void insertCandidate(
+            UUID candidateId,
+            String userId,
+            String onboardingKind,
+            UUID sourceBindingId,
+            UUID sourceAccountId,
+            String status,
+            UUID conflictingAccountId,
+            UUID orgUnitId,
+            UUID positionId
+    ) {
+        jdbc.update("""
+                insert into wecom_person_onboarding
+                    (id, tenant_id, corp_id, user_id_fingerprint, user_id_ciphertext,
+                     display_name, onboarding_kind, source_binding_id, source_account_id,
+                     directory_status, status, requested_org_unit_id, requested_position_id,
+                     identity_verified_at, profile_submitted_at, conflicting_account_id,
+                     source_event_hash, last_event_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, now(), now(), ?, ?, now())
+                """, candidateId, TENANT, CORP_ID, codec.fingerprint(userId), codec.encrypt(userId),
+                "Directory integration test", onboardingKind, sourceBindingId, sourceAccountId,
+                status, orgUnitId, positionId, conflictingAccountId,
+                WeComDirectorySecretCodec.sha256("event:" + candidateId));
+    }
+
+    private void insertSourceIdentity(
+            UUID accountId,
+            UUID employeeId,
+            UUID assignmentId,
+            UUID roleAssignmentId,
+            UUID bindingId,
+            String userId
+    ) {
+        jdbc.update("""
+                insert into user_account (id, tenant_id, login_name, display_name, status)
+                values (?, ?, ?, 'Assignment source', 'ACTIVE')
+                """, accountId, TENANT, "source." + accountId);
+        jdbc.update("""
+                insert into employee
+                    (id, tenant_id, account_id, employee_no, name, employment_status, hired_on)
+                values (?, ?, ?, ?, 'Assignment source', 'ACTIVE', current_date)
+                """, employeeId, TENANT, accountId, "SOURCE-" + employeeId);
+        jdbc.update("""
+                insert into employee_position_assignment
+                    (id, tenant_id, employee_id, org_unit_id, position_id,
+                     is_primary, assignment_type, valid_from, status)
+                values (?, ?, ?, ?, ?, true, 'PERMANENT', current_date, 'ACTIVE')
+                """, assignmentId, TENANT, employeeId, FRONT_DEPARTMENT, FRONT_POSITION);
+        jdbc.update("""
+                insert into role_assignment
+                    (id, tenant_id, account_id, role_id, scope_org_unit_id,
+                     scope_type, valid_from, granted_by, source_type, source_assignment_id)
+                select ?, ?, ?, profile.default_role_id, ?, 'ORG_UNIT', now(), ?,
+                       'POSITION_ASSIGNMENT', ?
+                from position_function_profile profile
+                where profile.tenant_id = ? and profile.position_id = ? and profile.scope_type = 'GROUP'
+                """, roleAssignmentId, TENANT, accountId, FRONT_DEPARTMENT, CEO,
+                assignmentId, TENANT, FRONT_POSITION);
+        insertBinding(bindingId, userId, accountId, assignmentId);
+    }
+
+    private void assertLaterRemovalFollowsUnprocessedRename(
+            String removalChangeType, String removalStatus, String expectedReason
+    ) {
+        String firstUserId = "removal-lineage-a-" + UUID.randomUUID();
+        String secondUserId = "removal-lineage-b-" + UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        UUID employeeId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID roleAssignmentId = UUID.randomUUID();
+        UUID bindingId = UUID.randomUUID();
+        insertSourceIdentity(accountId, employeeId, assignmentId, roleAssignmentId,
+                bindingId, firstUserId);
+        OffsetDateTime renameAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime removalAt = renameAt.plusMinutes(1);
+        WeComDirectoryEvent rename = new WeComDirectoryEvent(
+                "change_contact", "update_user", firstUserId, secondUserId,
+                "Existing employee", "1", null, null, renameAt);
+        WeComDirectoryEvent removal = new WeComDirectoryEvent(
+                "change_contact", removalChangeType, secondUserId, null,
+                "Existing employee", removalStatus, null, null, removalAt);
+        UUID renameReceipt = insertReceipt(rename, renameAt.plusSeconds(1));
+        UUID removalReceipt = insertReceipt(removal, removalAt.plusSeconds(1));
+        WeComDirectoryOnboardingService lifecycle = lifecycleService();
+
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                removal, removalReceipt, UUID.randomUUID()))).isTrue();
+        assertThat(jdbc.queryForMap("""
+                select account_id, status, status_reason, wecom_user_id
+                from wecom_user_binding where id = ?
+                """, bindingId))
+                .containsEntry("account_id", accountId)
+                .containsEntry("status", "SUSPENDED")
+                .containsEntry("status_reason", expectedReason)
+                .containsEntry("wecom_user_id", firstUserId);
+        assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
+                rename, renameReceipt, UUID.randomUUID()))).isFalse();
+        assertThat(jdbc.queryForObject("""
+                select count(*) from wecom_person_onboarding
+                where corp_id = ? and status in ('WAITING_PROFILE','PENDING_APPROVAL','CONFLICT')
+                  and user_id_fingerprint in (?, ?)
+                """, Integer.class, CORP_ID,
+                codec.fingerprint(firstUserId), codec.fingerprint(secondUserId))).isZero();
+    }
+
+    private UUID insertSupersededInvitationCandidate(
+            String userId, String status, String failureCode
+    ) {
+        UUID candidateId = UUID.randomUUID();
+        OffsetDateTime candidateAt = OffsetDateTime.now().plusSeconds(1);
+        OffsetDateTime replacementAt = candidateAt.plusMinutes(1);
+        WeComDirectoryEvent candidateEvent = new WeComDirectoryEvent(
+                "change_contact", "create_user", userId, null,
+                "Old private display name", "1", null, null, candidateAt);
+        WeComDirectoryEvent replacement = new WeComDirectoryEvent(
+                "change_contact", "create_user", userId, null,
+                "Replacement employee", "1", null, null, replacementAt);
+        UUID candidateReceipt = insertReceipt(candidateEvent, candidateAt.plusSeconds(1));
+        jdbc.update("""
+                update wecom_directory_event_receipt
+                set status = 'SUCCEEDED', processed_at = now(), payload_ciphertext = ''
+                where id = ?
+                """,
+                candidateReceipt);
+        insertCandidate(candidateId, userId, "NEW_MEMBER", null, null,
+                "EXPIRED".equals(status) ? "WAITING_PROFILE" : status,
+                null, FRONT_DEPARTMENT, FRONT_POSITION);
+        jdbc.update("""
+                update wecom_person_onboarding
+                set status = ?, expired_at = case when ? = 'EXPIRED' then now() else null end,
+                    last_event_at = ?, last_event_receipt_id = ?, failure_code = ?
+                where id = ?
+                """, status, status, candidateAt, candidateReceipt, failureCode, candidateId);
+        insertReceipt(replacement, replacementAt.plusSeconds(1));
+        return candidateId;
+    }
+
+    private void assertCancelledWithoutIdentityOrInvitation(UUID candidateId) {
+        assertThat(jdbc.queryForMap("""
+                select status, user_id_ciphertext is null as identity_cleared,
+                       invitation_token_hash is null and invitation_issued_at is null
+                           and invitation_expires_at is null as invitation_cleared,
+                       oauth_state_hash is null and browser_verifier_hash is null
+                           and provider_code_hash is null as oauth_cleared,
+                       exchange_code_hash is null and session_token_hash is null
+                           as session_cleared,
+                       identity_verified_at is null and requested_org_unit_id is null
+                           and requested_position_id is null and profile_submitted_at is null
+                           and conflicting_account_id is null as profile_cleared
+                from wecom_person_onboarding where id = ?
+                """, candidateId))
+                .containsEntry("status", "CANCELLED")
+                .containsEntry("identity_cleared", true)
+                .containsEntry("invitation_cleared", true)
+                .containsEntry("oauth_cleared", true)
+                .containsEntry("session_cleared", true)
+                .containsEntry("profile_cleared", true);
+    }
+
+    private Counts identityCounts() {
+        return new Counts(
+                count("user_account"),
+                count("employee"),
+                count("employee_position_assignment"),
+                count("role_assignment"),
+                count("wecom_user_binding"));
+    }
+
+    private UUID insertReceipt(WeComDirectoryEvent event, OffsetDateTime receivedAt) {
+        UUID receiptId = UUID.randomUUID();
+        String payload = event.toString() + receiptId;
+        jdbc.update("""
+                insert into wecom_directory_event_receipt
+                    (id, tenant_id, corp_id, event_key_hash, payload_hash, payload_ciphertext,
+                     event_type, change_type, event_priority, user_id_fingerprint,
+                     previous_user_id_fingerprint, occurred_at, status, correlation_id, received_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSING', ?, ?)
+                """, receiptId, TENANT, CORP_ID,
+                WeComDirectorySecretCodec.sha256("receipt:" + receiptId),
+                WeComDirectorySecretCodec.sha256(payload), codec.encrypt(payload),
+                event.eventType(), event.changeType(), event.priority(),
+                codec.fingerprint(event.effectiveUserId()),
+                event.newUserId() == null ? null : codec.fingerprint(event.userId()),
+                event.occurredAt(), UUID.randomUUID(), receivedAt);
+        return receiptId;
+    }
+
+    private int count(String table) {
+        return jdbc.queryForObject("select count(*) from " + table, Integer.class);
+    }
+
+    private UUID uuidValue(String sql, Object... arguments) {
+        return jdbc.queryForObject(sql, UUID.class, arguments);
+    }
+
+    private <T> T inTransaction(java.util.function.Supplier<T> action) {
+        return new TransactionTemplate(transactionManager).execute(status -> action.get());
+    }
+
+    private static EmbeddedPostgres startPostgres() {
+        try {
+            return EmbeddedPostgres.builder().start();
+        } catch (Exception exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+    }
+
+    private record Counts(int accounts, int employees, int assignments, int roles, int bindings) { }
+    private record Attempt(ApprovalResponse response, Throwable failure) { }
+}

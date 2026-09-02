@@ -81,10 +81,33 @@ app:
       allow-sanitized-image-fallback: ${ATTACHMENT_SCAN_ALLOW_SANITIZED_IMAGE_FALLBACK:false}
   wecom:
     enabled: ${WECOM_ENABLED:false}
+    # Directory callbacks and automatic onboarding are independently enabled.
+    # Enabling this does not enable any group robot or outbound group delivery.
+    directory-sync-enabled: ${WECOM_DIRECTORY_SYNC_ENABLED:false}
+    directory:
+      callback-token: ${WECOM_DIRECTORY_CALLBACK_TOKEN:}
+      callback-aes-key: ${WECOM_DIRECTORY_CALLBACK_AES_KEY:}
+      receive-id: ${WECOM_DIRECTORY_RECEIVE_ID:}
+      encryption-key: ${WECOM_DIRECTORY_ENCRYPTION_KEY:}
+      oauth-callback-url: ${WECOM_DIRECTORY_OAUTH_CALLBACK_URL:}
+      invitation-ttl-minutes: ${WECOM_DIRECTORY_INVITATION_TTL_MINUTES:120}
+      exchange-ttl-minutes: ${WECOM_DIRECTORY_EXCHANGE_TTL_MINUTES:2}
+      session-ttl-minutes: ${WECOM_DIRECTORY_SESSION_TTL_MINUTES:30}
+      callback-clock-skew-seconds: ${WECOM_DIRECTORY_CALLBACK_CLOCK_SKEW_SECONDS:600}
+      recovery-delay-ms: ${WECOM_DIRECTORY_RECOVERY_DELAY_MS:15000}
+      recovery-initial-delay-ms: ${WECOM_DIRECTORY_RECOVERY_INITIAL_DELAY_MS:15000}
+      candidate-expiry-delay-ms: ${WECOM_DIRECTORY_CANDIDATE_EXPIRY_DELAY_MS:60000}
+      candidate-expiry-initial-delay-ms: ${WECOM_DIRECTORY_CANDIDATE_EXPIRY_INITIAL_DELAY_MS:60000}
     # Independent of WECOM_ENABLED: this protects store robot addresses at rest.
     # It must be a Base64-encoded 32-byte value and is never packaged in source.
     group-robot:
       encryption-key: ${WECOM_GROUP_ROBOT_ENCRYPTION_KEY:}
+      delivery-enabled: ${WECOM_GROUP_ROBOT_DELIVERY_ENABLED:false}
+      pilot-hotel-id: ${WECOM_GROUP_ROBOT_PILOT_HOTEL_ID:}
+      delivery-not-before: ${WECOM_GROUP_ROBOT_DELIVERY_NOT_BEFORE:}
+      batch-size: ${WECOM_GROUP_ROBOT_BATCH_SIZE:20}
+      fixed-delay-ms: ${WECOM_GROUP_ROBOT_FIXED_DELAY_MS:30000}
+      initial-delay-ms: ${WECOM_GROUP_ROBOT_INITIAL_DELAY_MS:30000}
     tenant-id: ${WECOM_TENANT_ID:}
     corp-id: ${WECOM_CORP_ID:}
     agent-id: ${WECOM_AGENT_ID:}

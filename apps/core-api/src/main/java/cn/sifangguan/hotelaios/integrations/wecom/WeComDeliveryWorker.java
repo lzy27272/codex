@@ -94,7 +94,7 @@ public class WeComDeliveryWorker {
                         from wecom_chat_binding cb
                         where cb.tenant_id = n.tenant_id and cb.corp_id = :corpId
                           and cb.org_unit_id = task.org_unit_id and cb.status = 'ACTIVE'
-                          and cb.allowed_actions ? 'TASK_NOTIFICATION'
+                          and jsonb_exists(cb.allowed_actions, 'TASK_NOTIFICATION')
                           and case
                                 when jsonb_typeof(task.source_snapshot #> '{delivery,wecomGroupShareable}') = 'boolean'
                                 then (task.source_snapshot #>> '{delivery,wecomGroupShareable}')::boolean
@@ -147,7 +147,7 @@ public class WeComDeliveryWorker {
                         from wecom_chat_binding cb
                         where cb.tenant_id = n.tenant_id and cb.corp_id = :corpId
                           and cb.org_unit_id = task.org_unit_id and cb.status = 'ACTIVE'
-                          and cb.allowed_actions ? 'TASK_NOTIFICATION'
+                          and jsonb_exists(cb.allowed_actions, 'TASK_NOTIFICATION')
                           and case
                                 when jsonb_typeof(task.source_snapshot #> '{delivery,wecomGroupShareable}') = 'boolean'
                                 then (task.source_snapshot #>> '{delivery,wecomGroupShareable}')::boolean

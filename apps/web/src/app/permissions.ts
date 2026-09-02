@@ -86,6 +86,11 @@ export const permissions = Object.freeze({
     export: 'investment.export',
     audit: 'investment.audit',
   },
+  wecomBinding: {
+    read: 'wecom-binding.read',
+    manage: 'wecom-binding.manage',
+    approve: 'wecom-binding.approve',
+  },
 })
 
 export function hasPermission(granted: string[], permission: string): boolean {

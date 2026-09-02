@@ -14,7 +14,7 @@ import java.util.HexFormat;
 
 /** Strict envelope and identity-field parser for the newer WeCom AI-bot JSON callback. */
 @Component
-@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"app.wecom.enabled", "app.wecom.bot.actions-enabled"}, havingValue = "true")
 public class WeComJson {
     private final ObjectMapper objectMapper;
     private final WeComProperties properties;

@@ -46,11 +46,19 @@ class WeComProtocolTest {
         String task = UUID.randomUUID().toString();
         assertThat(WeComOAuthService.validateReturnTo("#/tasks?view=mine&taskId=" + task))
                 .isEqualTo("#/tasks?view=mine&taskId=" + task);
+        assertThat(WeComOAuthService.validateReturnTo("#/daily-reports/" + task))
+                .isEqualTo("#/daily-reports/" + task);
+        assertThat(WeComOAuthService.validateReturnTo("#/workbench"))
+                .isEqualTo("#/workbench");
         assertThatThrownBy(() -> WeComOAuthService.validateReturnTo("https://evil.example/tasks?taskId=" + task))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> WeComOAuthService.validateReturnTo("#/tasks?view=mine"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> WeComOAuthService.validateReturnTo("#/admin?taskId=" + task))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WeComOAuthService.validateReturnTo("#/daily-reports/" + task + "?admin=true"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WeComOAuthService.validateReturnTo("#/workbench?next=/admin"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -73,6 +81,7 @@ class WeComProtocolTest {
         WeComProperties properties = new WeComProperties(
                 UUID.randomUUID().toString(), "corp-1", "100001", "corp-secret-value",
                 "callback-token", aesKey, "bot-1", "bot-receiver-1",
+                true,
                 "http://localhost:5173", "https://api.example.test/api/v1/integrations/wecom/oauth/callback",
                 10, 2, 30, 500);
         properties.validate();

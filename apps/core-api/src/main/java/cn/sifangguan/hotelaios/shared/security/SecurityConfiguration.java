@@ -56,6 +56,18 @@ public class SecurityConfiguration {
                                 "/api/v1/integrations/wecom/oauth/start",
                                 "/api/v1/integrations/wecom/oauth/callback").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/integrations/wecom/oauth/exchange").permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/v1/integrations/wecom/binding-enrollment/preview",
+                                "/api/v1/integrations/wecom/binding-enrollment/start").permitAll()
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/v1/integrations/wecom/directory/callback",
+                                "/api/v1/integrations/wecom/directory-onboarding/oauth/callback").permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/v1/integrations/wecom/directory/callback",
+                                "/api/v1/integrations/wecom/directory-onboarding/start",
+                                "/api/v1/integrations/wecom/directory-onboarding/exchange",
+                                "/api/v1/integrations/wecom/directory-onboarding/context",
+                                "/api/v1/integrations/wecom/directory-onboarding/submit").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2

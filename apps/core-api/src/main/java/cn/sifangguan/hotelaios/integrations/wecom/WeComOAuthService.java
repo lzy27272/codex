@@ -23,7 +23,7 @@ import java.util.UUID;
 @Service
 @ConditionalOnProperty(name = {"app.wecom.enabled", "app.security.local-login.enabled"}, havingValue = "true")
 public class WeComOAuthService {
-    private static final Set<String> ALLOWED_QUERY_KEYS = Set.of("view", "taskId");
+    private static final Set<String> ALLOWED_TASK_QUERY_KEYS = Set.of("view", "taskId");
     private final SecureRandom secureRandom = new SecureRandom();
     private final WeComProperties properties;
     private final WeComOAuthStore store;
@@ -114,7 +114,7 @@ public class WeComOAuthService {
 
     static String validateReturnTo(String raw) {
         if (raw == null || raw.isBlank()) {
-            throw new IllegalArgumentException("WeCom returnTo must include one taskId");
+            throw new IllegalArgumentException("WeCom returnTo must include one allowed internal destination");
         }
         String value = raw.trim();
         if (value.length() > 500 || value.contains("\\") || value.contains("://")
@@ -128,12 +128,32 @@ public class WeComOAuthService {
         } catch (IllegalArgumentException exception) {
             throw new IllegalArgumentException("WeCom returnTo is invalid", exception);
         }
-        if (!"/tasks".equals(uri.getPath()) || uri.isAbsolute() || uri.getRawFragment() != null) {
-            throw new IllegalArgumentException("WeCom returnTo must target /tasks");
+        if (uri.isAbsolute() || uri.getRawFragment() != null) {
+            throw new IllegalArgumentException("WeCom returnTo must target an allowed work item");
+        }
+        if ("/workbench".equals(uri.getPath())) {
+            if (uri.getRawQuery() != null) {
+                throw new IllegalArgumentException("WeCom workbench returnTo cannot contain query parameters");
+            }
+            return value;
+        }
+        if (uri.getPath().startsWith("/daily-reports/")) {
+            if (uri.getRawQuery() != null) {
+                throw new IllegalArgumentException("WeCom daily-report returnTo cannot contain query parameters");
+            }
+            String reportId = uri.getPath().substring("/daily-reports/".length());
+            if (reportId.isBlank() || reportId.contains("/")) {
+                throw new IllegalArgumentException("WeCom returnTo must include one reportId");
+            }
+            UUID.fromString(reportId);
+            return value;
+        }
+        if (!"/tasks".equals(uri.getPath())) {
+            throw new IllegalArgumentException("WeCom returnTo must target /workbench, /tasks or /daily-reports/{reportId}");
         }
         if (uri.getRawQuery() != null) {
             var query = UriComponentsBuilder.fromUri(uri).build().getQueryParams();
-            if (!ALLOWED_QUERY_KEYS.containsAll(query.keySet())) {
+            if (!ALLOWED_TASK_QUERY_KEYS.containsAll(query.keySet())) {
                 throw new IllegalArgumentException("WeCom returnTo contains an unsupported query parameter");
             }
             List<String> views = query.get("view");

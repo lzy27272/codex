@@ -18,7 +18,7 @@ import java.util.List;
 
 /** Implements the WeCom callback SHA-1 signature and AES-CBC protocol. */
 @Component
-@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"app.wecom.enabled", "app.wecom.bot.actions-enabled"}, havingValue = "true")
 public class WeComCallbackCrypto {
     private static final int WECOM_BLOCK_SIZE = 32;
     private final WeComProperties properties;

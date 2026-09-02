@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 
@@ -52,7 +53,7 @@ public class IamService {
                 rs.getString("employment_status")
         ));
 
-        List<IamModels.PositionAssignment> assignments = jdbc.query("""
+        List<AssignmentRow> assignmentRows = jdbc.query("""
                 select epa.id, epa.org_unit_id, ou.code as org_code, ou.name as org_name,
                        epa.position_id, pd.code as position_code, pd.name as position_name,
                        epa.is_primary, epa.assignment_type, epa.valid_from, epa.valid_to
@@ -63,13 +64,45 @@ public class IamService {
                   on ou.tenant_id = epa.tenant_id and ou.id = epa.org_unit_id
                 join position_definition pd
                   on pd.tenant_id = epa.tenant_id and pd.id = epa.position_id
+                 and pd.status = 'ACTIVE'
+                 and pd.deleted_at is null
+                 and pd.permanently_deleted_at is null
+                left join lateral (
+                    select ancestor.id
+                    from org_unit_closure closure
+                    join org_unit ancestor
+                      on ancestor.tenant_id = closure.tenant_id
+                     and ancestor.id = closure.ancestor_id
+                    where closure.tenant_id = epa.tenant_id
+                      and closure.descendant_id = epa.org_unit_id
+                      and ancestor.unit_type = 'HOTEL'
+                      and ancestor.status = 'ACTIVE'
+                    order by closure.depth
+                    limit 1
+                ) hotel_context on true
                 where e.tenant_id = :tenantId
                   and e.account_id = :accountId
+                  and e.employment_status = 'ACTIVE'
+                  and e.deleted_at is null
+                  and ou.status = 'ACTIVE'
                   and epa.status = 'ACTIVE'
                   and epa.valid_from <= current_date
                   and (epa.valid_to is null or epa.valid_to >= current_date)
+                  and (
+                    pd.applies_to_all_hotels = true
+                    or (
+                      hotel_context.id is not null
+                      and exists (
+                        select 1
+                        from position_applicable_hotel applicable
+                        where applicable.tenant_id = pd.tenant_id
+                          and applicable.position_id = pd.id
+                          and applicable.hotel_org_unit_id = hotel_context.id
+                      )
+                    )
+                  )
                 order by epa.is_primary desc, pd.name, ou.name
-                """, params, (rs, rowNum) -> new IamModels.PositionAssignment(
+                """, params, (rs, rowNum) -> new AssignmentRow(
                 rs.getObject("id", UUID.class),
                 rs.getObject("org_unit_id", UUID.class),
                 rs.getString("org_code"),
@@ -82,6 +115,17 @@ public class IamService {
                 rs.getObject("valid_from", java.time.LocalDate.class),
                 rs.getObject("valid_to", java.time.LocalDate.class)
         ));
+        List<IamModels.PositionAssignment> assignments = assignmentRows.stream().map(row -> {
+            AssignmentFunctionProfile profile = assignmentFunctionProfile(principal, row.id());
+            Set<String> assignmentPermissions = new LinkedHashSet<>(profile.permissionCodes());
+            assignmentPermissions.addAll(supplementalAccountPermissions(principal, row.id()));
+            return new IamModels.PositionAssignment(
+                    row.id(), row.organizationId(), row.organizationCode(), row.organizationName(),
+                    row.positionId(), row.positionCode(), row.positionName(), row.primary(),
+                    row.assignmentType(), row.validFrom(), row.validTo(), Set.copyOf(assignmentPermissions),
+                    profile.authorizationScopeType(), profile.wecomSelfSelectable()
+            );
+        }).toList();
 
         return new IamModels.Me(
                 principal.tenantId(),
@@ -203,5 +247,209 @@ public class IamService {
         if (count == null || count == 0) {
             throw new IllegalArgumentException("资源不存在或不属于当前租户");
         }
+    }
+
+    private AssignmentFunctionProfile assignmentFunctionProfile(TenantPrincipal principal, UUID assignmentId) {
+        MapSqlParameterSource params = base(principal).addValue("assignmentId", assignmentId);
+        Map<String, Object> profile = jdbc.queryForMap("""
+                with assignment_context as (
+                    select assignment.position_id, assignment.org_unit_id,
+                           (
+                               select ancestor.id
+                               from org_unit_closure closure
+                               join org_unit ancestor
+                                 on ancestor.tenant_id = closure.tenant_id
+                                and ancestor.id = closure.ancestor_id
+                               where closure.tenant_id = assignment.tenant_id
+                                 and closure.descendant_id = assignment.org_unit_id
+                                 and ancestor.unit_type = 'HOTEL'
+                               order by closure.depth
+                               limit 1
+                           ) as hotel_id
+                    from employee_position_assignment assignment
+                    join employee employee_record
+                      on employee_record.tenant_id = assignment.tenant_id
+                     and employee_record.id = assignment.employee_id
+                     and employee_record.employment_status = 'ACTIVE'
+                     and employee_record.deleted_at is null
+                    join org_unit assignment_org
+                      on assignment_org.tenant_id = assignment.tenant_id
+                     and assignment_org.id = assignment.org_unit_id
+                     and assignment_org.status = 'ACTIVE'
+                    join position_definition position
+                      on position.tenant_id = assignment.tenant_id
+                     and position.id = assignment.position_id
+                     and position.status = 'ACTIVE'
+                     and position.deleted_at is null
+                     and position.permanently_deleted_at is null
+                    where assignment.tenant_id = :tenantId and assignment.id = :assignmentId
+                      and assignment.status = 'ACTIVE'
+                      and assignment.valid_from <= current_date
+                      and (assignment.valid_to is null or assignment.valid_to >= current_date)
+                )
+                select group_profile.default_role_id,
+                       coalesce(hotel_version.id, group_version.id) as effective_version_id,
+                       coalesce(hotel_version.authorization_scope_type,
+                                group_version.authorization_scope_type, 'SELF') as authorization_scope_type,
+                       coalesce(hotel_version.wecom_self_selectable,
+                                group_version.wecom_self_selectable, false) as wecom_self_selectable
+                from assignment_context context
+                join position_function_profile group_profile
+                  on group_profile.tenant_id = :tenantId
+                 and group_profile.position_id = context.position_id
+                 and group_profile.scope_type = 'GROUP'
+                left join position_function_profile_version group_version
+                  on group_version.tenant_id = group_profile.tenant_id
+                 and group_version.profile_id = group_profile.id
+                 and group_version.lifecycle_status = 'PUBLISHED'
+                left join position_function_profile hotel_profile
+                  on hotel_profile.tenant_id = group_profile.tenant_id
+                 and hotel_profile.position_id = group_profile.position_id
+                 and hotel_profile.scope_type = 'HOTEL'
+                 and hotel_profile.hotel_org_unit_id = context.hotel_id
+                left join position_function_profile_version hotel_version
+                  on hotel_version.tenant_id = hotel_profile.tenant_id
+                 and hotel_version.profile_id = hotel_profile.id
+                 and hotel_version.lifecycle_status = 'PUBLISHED'
+                where exists (
+                    select 1
+                    from position_definition position
+                    where position.tenant_id = :tenantId
+                      and position.id = context.position_id
+                      and (
+                        position.applies_to_all_hotels = true
+                        or (
+                          context.hotel_id is not null
+                          and exists (
+                            select 1
+                            from position_applicable_hotel applicable
+                            where applicable.tenant_id = position.tenant_id
+                              and applicable.position_id = position.id
+                              and applicable.hotel_org_unit_id = context.hotel_id
+                          )
+                        )
+                      )
+                )
+                """, params);
+        UUID versionId = (UUID) profile.get("effective_version_id");
+        UUID roleId = (UUID) profile.get("default_role_id");
+        Set<String> permissionCodes;
+        if (versionId != null) {
+            permissionCodes = new LinkedHashSet<>(jdbc.queryForList("""
+                    select permission.code
+                    from position_function_profile_permission item
+                    join permission on permission.id = item.permission_id
+                    where item.tenant_id = :tenantId and item.profile_version_id = :versionId
+                    order by permission.code
+                    """, params.addValue("versionId", versionId), String.class));
+        } else {
+            // Compatibility for pre-P1 positions until their first explicit profile publish.
+            permissionCodes = new LinkedHashSet<>(jdbc.queryForList("""
+                    select permission.code
+                    from role_permission grant_item
+                    join permission on permission.id = grant_item.permission_id
+                    where grant_item.tenant_id = :tenantId and grant_item.role_id = :roleId
+                      and permission.delegable_to_position = true
+                    order by permission.code
+                    """, params.addValue("roleId", roleId), String.class));
+        }
+        return new AssignmentFunctionProfile(
+                Set.copyOf(permissionCodes),
+                String.valueOf(profile.get("authorization_scope_type")),
+                Boolean.TRUE.equals(profile.get("wecom_self_selectable"))
+        );
+    }
+
+    private Set<String> supplementalAccountPermissions(TenantPrincipal principal, UUID assignmentId) {
+        return new LinkedHashSet<>(jdbc.queryForList("""
+                select distinct permission.code
+                from role_assignment assignment
+                join app_role role
+                  on role.tenant_id = assignment.tenant_id and role.id = assignment.role_id
+                join role_permission grant_item
+                  on grant_item.tenant_id = role.tenant_id and grant_item.role_id = role.id
+                join permission on permission.id = grant_item.permission_id
+                join employee employee_record
+                  on employee_record.tenant_id = assignment.tenant_id
+                 and employee_record.account_id = assignment.account_id
+                 and employee_record.employment_status = 'ACTIVE'
+                 and employee_record.deleted_at is null
+                join employee_position_assignment position_assignment
+                  on position_assignment.tenant_id = employee_record.tenant_id
+                 and position_assignment.employee_id = employee_record.id
+                 and position_assignment.id = :assignmentId
+                 and position_assignment.status = 'ACTIVE'
+                 and position_assignment.valid_from <= current_date
+                 and (position_assignment.valid_to is null
+                      or position_assignment.valid_to >= current_date)
+                join position_definition position
+                  on position.tenant_id = position_assignment.tenant_id
+                 and position.id = position_assignment.position_id
+                 and position.status = 'ACTIVE'
+                 and position.deleted_at is null
+                 and position.permanently_deleted_at is null
+                left join lateral (
+                    select ancestor.id
+                    from org_unit_closure hotel_closure
+                    join org_unit ancestor
+                      on ancestor.tenant_id = hotel_closure.tenant_id
+                     and ancestor.id = hotel_closure.ancestor_id
+                    where hotel_closure.tenant_id = position_assignment.tenant_id
+                      and hotel_closure.descendant_id = position_assignment.org_unit_id
+                      and ancestor.unit_type = 'HOTEL'
+                      and ancestor.status = 'ACTIVE'
+                    order by hotel_closure.depth
+                    limit 1
+                ) hotel_context on true
+                where assignment.tenant_id = :tenantId
+                  and assignment.account_id = :accountId
+                  and assignment.valid_from <= now()
+                  and (assignment.valid_to is null or assignment.valid_to > now())
+                  and role.code = 'HR_KPI_ADMIN'
+                  and (assignment.source_assignment_id is null
+                       or (assignment.source_type = 'POSITION_ASSIGNMENT'
+                           and assignment.source_assignment_id = position_assignment.id))
+                  and (
+                    position.applies_to_all_hotels = true
+                    or (
+                      hotel_context.id is not null
+                      and exists (
+                        select 1
+                        from position_applicable_hotel applicable
+                        where applicable.tenant_id = position.tenant_id
+                          and applicable.position_id = position.id
+                          and applicable.hotel_org_unit_id = hotel_context.id
+                      )
+                    )
+                  )
+                  and (
+                    assignment.scope_type in ('TENANT', 'SELF')
+                    or (assignment.scope_type = 'ORG_UNIT'
+                        and assignment.scope_org_unit_id = position_assignment.org_unit_id)
+                    or (assignment.scope_type = 'ORG_TREE'
+                        and assignment.scope_org_unit_id is not null
+                        and exists (
+                          select 1
+                          from org_unit_closure grant_scope
+                          where grant_scope.tenant_id = assignment.tenant_id
+                            and grant_scope.ancestor_id = assignment.scope_org_unit_id
+                            and grant_scope.descendant_id = position_assignment.org_unit_id
+                        ))
+                  )
+                order by permission.code
+                """, base(principal).addValue("accountId", principal.actorId())
+                .addValue("assignmentId", assignmentId), String.class));
+    }
+
+    private record AssignmentRow(
+            UUID id, UUID organizationId, String organizationCode, String organizationName,
+            UUID positionId, String positionCode, String positionName, boolean primary,
+            String assignmentType, java.time.LocalDate validFrom, java.time.LocalDate validTo
+    ) {
+    }
+
+    private record AssignmentFunctionProfile(
+            Set<String> permissionCodes, String authorizationScopeType, boolean wecomSelfSelectable
+    ) {
     }
 }

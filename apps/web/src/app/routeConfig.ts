@@ -52,6 +52,7 @@ type RouteDefinition = {
 
 const legacyViews: readonly ViewId[] = [
   'workbench',
+  'all-functions',
   'hotel-dashboard',
   'operations-dashboard',
   'work-packages',
@@ -64,6 +65,8 @@ const legacyViews: readonly ViewId[] = [
   'templates',
   'organization',
   'wecom-webhooks',
+  'wecom-bindings',
+  'wecom-onboarding',
 ]
 
 const legacyViewSet = new Set<string>(legacyViews)

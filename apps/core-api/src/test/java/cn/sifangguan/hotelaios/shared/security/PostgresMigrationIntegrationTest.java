@@ -54,7 +54,7 @@ class PostgresMigrationIntegrationTest {
                     .migrate()
                     .migrationsExecuted;
 
-            assertEquals(29, migrations);
+            assertEquals(34, migrations);
 
             try (Connection owner = ownerDataSource.getConnection();
                  Statement statement = owner.createStatement()) {
@@ -87,6 +87,88 @@ class PostgresMigrationIntegrationTest {
                             "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid = '" + table + "'::regclass"),
                             table + " must enforce tenant RLS");
                 }
+                assertEquals(3, wecomBindingPermissionCount(statement, "CEO"));
+                assertEquals(3, wecomBindingPermissionCount(statement, "PLATFORM_ADMIN"));
+                assertEquals(3, wecomBindingPermissionCount(statement, "HR_KPI_ADMIN"));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM role_permission grant_item
+                        JOIN app_role role ON role.tenant_id = grant_item.tenant_id AND role.id = grant_item.role_id
+                        JOIN permission permission_item ON permission_item.id = grant_item.permission_id
+                        WHERE grant_item.tenant_id = '%s'::uuid AND role.code = 'HR_KPI_ADMIN'
+                          AND permission_item.code = 'wecom-binding.approve'
+                        """.formatted(DEMO_TENANT)));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM pg_indexes
+                        WHERE schemaname = 'public'
+                          AND indexname = 'ux_wecom_directory_onboarding_open_member'
+                        """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM pg_constraint
+                        WHERE conrelid = 'wecom_person_onboarding'::regclass
+                          AND contype = 'c'
+                          AND pg_get_constraintdef(oid) ILIKE '%02:00:05%'
+                        """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM pg_constraint
+                        WHERE conrelid = 'wecom_person_onboarding'::regclass
+                          AND contype = 'c'
+                          AND pg_get_constraintdef(oid) ILIKE '%role_assignment_id IS NOT NULL%'
+                        """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM pg_constraint
+                        WHERE conrelid = 'wecom_person_onboarding'::regclass
+                          AND contype = 'c'
+                          AND pg_get_constraintdef(oid) ILIKE '%user_id_ciphertext IS NULL%'
+                          AND pg_get_constraintdef(oid) ILIKE '%session_token_hash IS NULL%'
+                        """));
+                assertEquals(2, scalarInt(statement, """
+                        SELECT count(*) FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'role_assignment'
+                          AND column_name IN ('source_type','source_assignment_id')
+                        """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM pg_indexes
+                        WHERE schemaname = 'public'
+                          AND indexname = 'ux_role_assignment_position_source'
+                        """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'wecom_person_onboarding'
+                          AND column_name = 'last_event_receipt_id'
+                        """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'wecom_user_binding'
+                          AND column_name = 'identity_event_receipt_id'
+                        """));
+                assertEquals(2, scalarInt(statement, """
+                        SELECT count(*) FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name IN ('wecom_user_binding','wecom_person_onboarding')
+                          AND column_name = 'directory_assignment_snapshot_hash'
+                        """));
+                assertEquals(0, scalarInt(statement, """
+                        SELECT count(*) FROM permission
+                        WHERE code = 'iam.manage' AND delegable_to_position = true
+                        """));
+                assertEquals(0, scalarInt(statement, """
+                        SELECT count(*) FROM permission
+                        WHERE code = 'investment.confirm' AND delegable_to_position = true
+                        """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM permission
+                        WHERE code = 'org.read' AND delegable_to_position = true
+                        """));
+                assertEquals(0, scalarInt(statement, """
+                        SELECT count(*)
+                        FROM position_definition position
+                        LEFT JOIN position_function_profile profile
+                          ON profile.tenant_id = position.tenant_id
+                         AND profile.position_id = position.id
+                         AND profile.scope_type = 'GROUP'
+                        WHERE position.tenant_id = '%s'::uuid
+                          AND profile.default_role_id IS NULL
+                        """.formatted(DEMO_TENANT)));
                 assertEquals(0, scalarInt(statement, """
                         SELECT count(*) FROM pg_trigger
                         WHERE NOT tgisinternal AND tgname IN (
@@ -394,7 +476,7 @@ class PostgresMigrationIntegrationTest {
             "notification_delivery", "ai_request", "ai_recommendation",
             "ai_recommendation_source", "ai_decision", "operation_export_job",
             "wecom_user_binding", "wecom_chat_binding", "wecom_inbound_receipt",
-            "wecom_task_card_binding", "wecom_oauth_attempt",
+            "wecom_task_card_binding", "wecom_oauth_attempt", "wecom_user_binding_request",
             "daily_report_delivery_policy"
             , "metric_definition_version", "kpi_compensation_policy_definition",
             "kpi_compensation_policy_version", "kpi_template_definition", "kpi_template_version",
@@ -407,6 +489,10 @@ class PostgresMigrationIntegrationTest {
             "kpi_inspection_verification", "kpi_inspection_sla_breach", "kpi_automation_run",
             "investment_cost_parameter_version", "investment_project_number_counter",
             "investment_project", "investment_plan_version"
+            , "position_applicable_hotel", "position_function_profile",
+            "position_function_profile_version", "position_function_profile_permission",
+            "position_assignment_recycle_snapshot",
+            "wecom_directory_event_receipt", "wecom_person_onboarding"
     };
 
     private static final String[] TENANT_RLS_TABLES = {
@@ -430,10 +516,14 @@ class PostgresMigrationIntegrationTest {
             "notification_delivery", "ai_request", "ai_recommendation",
             "ai_recommendation_source", "ai_decision", "operation_export_job",
             "wecom_user_binding", "wecom_chat_binding", "wecom_inbound_receipt",
-            "wecom_task_card_binding", "wecom_oauth_attempt",
+            "wecom_task_card_binding", "wecom_oauth_attempt", "wecom_user_binding_request",
             "daily_report_delivery_policy",
             "investment_cost_parameter_version", "investment_project_number_counter",
             "investment_project", "investment_plan_version"
+            , "position_applicable_hotel", "position_function_profile",
+            "position_function_profile_version", "position_function_profile_permission",
+            "position_assignment_recycle_snapshot",
+            "wecom_directory_event_receipt", "wecom_person_onboarding"
     };
 
     private static int scalarInt(Statement statement, String sql) throws Exception {
@@ -441,6 +531,16 @@ class PostgresMigrationIntegrationTest {
             assertTrue(resultSet.next());
             return resultSet.getInt(1);
         }
+    }
+
+    private static int wecomBindingPermissionCount(Statement statement, String roleCode) throws Exception {
+        return scalarInt(statement, """
+                SELECT count(*) FROM role_permission grant_item
+                JOIN app_role role ON role.tenant_id = grant_item.tenant_id AND role.id = grant_item.role_id
+                JOIN permission permission_item ON permission_item.id = grant_item.permission_id
+                WHERE grant_item.tenant_id = '%s'::uuid AND role.code = '%s'
+                  AND permission_item.code LIKE 'wecom-binding.%%'
+                """.formatted(DEMO_TENANT, roleCode));
     }
 
     private static boolean scalarBoolean(Statement statement, String sql) throws Exception {

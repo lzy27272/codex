@@ -69,8 +69,9 @@ class OrganizationMaintenanceIntegrationTest {
                 {"parentId":"%s","code":"TMP-ORG-%s","name":"临时测试部门","unitType":"DEPARTMENT","sortOrder":99}
                 """.formatted(HOTEL, suffix))).path("id").asText());
         UUID positionId = UUID.fromString(json(postJson("/api/v1/org/positions", CEO, """
-                {"code":"TMP-POS-%s","name":"临时测试岗位","jobFamily":"测试","levelCode":"T1"}
-                """.formatted(suffix))).path("id").asText());
+                {"name":"临时测试岗位","appliesToAllHotels":true,"applicableHotelIds":[],
+                 "permissionCodes":["org.read"],"authorizationScopeType":"SELF","wecomSelfSelectable":false}
+                """)).path("id").asText());
         UUID employeeId = UUID.fromString(json(postJson("/api/v1/org/employees", CEO, """
                 {"employeeNo":"TMP-EMP-%s","name":"临时测试员工","mobile":"13900000000","hiredOn":"2026-07-19"}
                 """.formatted(suffix))).path("id").asText());
@@ -79,18 +80,22 @@ class OrganizationMaintenanceIntegrationTest {
                 {"code":"TMP-ORG-%s","name":"临时测试部门已修改","sortOrder":98,"status":"INACTIVE"}
                 """.formatted(suffix), 200);
         putJson("/api/v1/org/positions/" + positionId, CEO, """
-                {"code":"TMP-POS-%s","name":"临时测试岗位已修改","jobFamily":"测试","levelCode":"T2","status":"INACTIVE"}
-                """.formatted(suffix), 200);
+                {"name":"临时测试岗位已修改","appliesToAllHotels":true,
+                 "applicableHotelIds":[],"expectedVersion":0}
+                """, 200);
         putJson("/api/v1/org/employees/" + employeeId, CEO, """
                 {"employeeNo":"TMP-EMP-%s","name":"临时测试员工已修改","mobile":"13900000001","hiredOn":"2026-07-19","employmentStatus":"INACTIVE"}
                 """.formatted(suffix), 200);
 
         deleteJson("/api/v1/org/units/" + orgId, CEO, 204);
-        deleteJson("/api/v1/org/positions/" + positionId, CEO, 204);
+        deleteJson("/api/v1/org/positions/" + positionId + "?expectedVersion=1", CEO, 204);
         deleteJson("/api/v1/org/employees/" + employeeId, CEO, 204);
 
         assertThat(count("org_unit", orgId)).isZero();
-        assertThat(count("position_definition", positionId)).isZero();
+        assertThat(count("position_definition", positionId)).isOne();
+        assertThat(jdbc.queryForObject(
+                "select deleted_at is not null from position_definition where id = ?", Boolean.class, positionId
+        )).isTrue();
         assertThat(count("employee", employeeId)).isOne();
         assertThat(jdbc.queryForObject(
                 "select deleted_at is not null from employee where id = ?", Boolean.class, employeeId
@@ -104,8 +109,12 @@ class OrganizationMaintenanceIntegrationTest {
                 {"parentId":"%s","code":"HIS-ORG-%s","name":"历史测试部门","unitType":"DEPARTMENT","sortOrder":99}
                 """.formatted(HOTEL, suffix))).path("id").asText());
         UUID positionId = UUID.fromString(json(postJson("/api/v1/org/positions", CEO, """
-                {"code":"HIS-POS-%s","name":"历史测试岗位","jobFamily":"测试","levelCode":"H1"}
-                """.formatted(suffix))).path("id").asText());
+                {"name":"历史测试岗位","appliesToAllHotels":true,"applicableHotelIds":[],
+                 "permissionCodes":["org.read"],"authorizationScopeType":"SELF","wecomSelfSelectable":false}
+                """)).path("id").asText());
+        postJson("/api/v1/org/positions/" + positionId + "/profile/publish", CEO, """
+                {"expectedProfileVersion":0,"expectedPositionVersion":0}
+                """);
         JsonNode employee = json(postJson("/api/v1/org/employees", CEO, """
                 {"employeeNo":"HIS-EMP-%s","name":"历史测试员工","mobile":"13900000002","hiredOn":"2026-07-19","loginName":"history.%s","temporaryPassword":"TempPass!2026"}
                 """.formatted(suffix, suffix.toLowerCase())));
@@ -128,10 +137,7 @@ class OrganizationMaintenanceIntegrationTest {
                 .isTrue();
         deleteJson("/api/v1/org/units/" + orgId, CEO, 400);
 
-        putJson("/api/v1/org/positions/" + positionId, CEO, """
-                {"code":"HIS-POS-%s","name":"历史测试岗位","jobFamily":"测试","levelCode":"H1","status":"INACTIVE"}
-                """.formatted(suffix), 200);
-        deleteJson("/api/v1/org/positions/" + positionId, CEO, 400);
+        deleteJson("/api/v1/org/positions/" + positionId + "?expectedVersion=1", CEO, 204);
 
         putJson("/api/v1/org/employees/" + employeeId, CEO, """
                 {"employeeNo":"HIS-EMP-%s","name":"历史测试员工","mobile":"13900000002","hiredOn":"2026-07-19","employmentStatus":"INACTIVE","loginName":"history.%s"}

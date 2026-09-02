@@ -140,6 +140,37 @@ public class WeComGroupRobotWebhookService {
         return new WeComGroupRobotWebhookModels.SaveWebhookResult(hotelOrgUnitId, true, updatedAt);
     }
 
+    @Transactional(readOnly = true)
+    public GroupRobotDestination resolveForDelivery(UUID tenantId, UUID hotelOrgUnitId) {
+        databaseContext.apply(tenantId);
+        List<GroupRobotDestination> destinations = jdbc.query("""
+                select webhook_ciphertext, encryption_nonce, webhook_hash
+                from wecom_group_robot_webhook
+                where tenant_id = :tenantId and hotel_org_unit_id = :hotelOrgUnitId
+                """, new MapSqlParameterSource()
+                .addValue("tenantId", tenantId)
+                .addValue("hotelOrgUnitId", hotelOrgUnitId),
+                (resultSet, rowNumber) -> {
+                    String plaintext = decrypt(
+                            resultSet.getBytes("webhook_ciphertext"),
+                            resultSet.getBytes("encryption_nonce"),
+                            tenantId,
+                            hotelOrgUnitId);
+                    URI webhook = validateWebhook(plaintext);
+                    String expectedHash = resultSet.getString("webhook_hash");
+                    if (!MessageDigest.isEqual(
+                            expectedHash.getBytes(StandardCharsets.US_ASCII),
+                            sha256(webhook.toString()).getBytes(StandardCharsets.US_ASCII))) {
+                        throw new IllegalStateException("WeCom group robot destination integrity check failed");
+                    }
+                    return new GroupRobotDestination(webhook, expectedHash);
+                });
+        if (destinations.size() != 1) {
+            throw new IllegalStateException("WeCom group robot destination is not configured for the pilot hotel");
+        }
+        return destinations.getFirst();
+    }
+
     private TenantPrincipal prepare() {
         TenantPrincipal principal = accessPolicy.principal();
         databaseContext.apply(principal.tenantId());
@@ -214,6 +245,20 @@ public class WeComGroupRobotWebhookService {
         }
     }
 
+    private String decrypt(byte[] ciphertext, byte[] nonce, UUID tenantId, UUID hotelOrgUnitId) {
+        if (encryptionKey == null) {
+            throw new IllegalStateException("WECOM_GROUP_ROBOT_ENCRYPTION_KEY must be configured before delivery");
+        }
+        try {
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(encryptionKey, "AES"), new GCMParameterSpec(128, nonce));
+            cipher.updateAAD((tenantId + ":" + hotelOrgUnitId).getBytes(StandardCharsets.UTF_8));
+            return new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Unable to resolve the WeCom group robot destination");
+        }
+    }
+
     private static byte[] parseEncryptionKey(String rawKey) {
         if (rawKey == null || rawKey.isBlank()) {
             return null;
@@ -242,5 +287,8 @@ public class WeComGroupRobotWebhookService {
     }
 
     private record EncryptionResult(byte[] nonce, byte[] ciphertext) {
+    }
+
+    record GroupRobotDestination(URI webhook, String endpointHash) {
     }
 }

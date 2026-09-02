@@ -60,7 +60,10 @@ public final class IamModels {
             boolean primary,
             String assignmentType,
             LocalDate validFrom,
-            LocalDate validTo
+            LocalDate validTo,
+            Set<String> permissionCodes,
+            String authorizationScopeType,
+            boolean wecomSelfSelectable
     ) {
     }
 }

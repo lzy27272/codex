@@ -10,7 +10,9 @@ class WeComFeatureFlagTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(WeComCallbackController.class, WeComOAuthController.class)
             .withBean(WeComCallbackService.class, () -> mock(WeComCallbackService.class))
-            .withBean(WeComOAuthService.class, () -> mock(WeComOAuthService.class));
+            .withBean(WeComOAuthService.class, () -> mock(WeComOAuthService.class))
+            .withBean(WeComBindingEnrollmentService.class,
+                    () -> mock(WeComBindingEnrollmentService.class));
 
     @Test
     void endpointsDoNotExistByDefault() {
@@ -21,9 +23,21 @@ class WeComFeatureFlagTest {
     }
 
     @Test
-    void endpointsExistOnlyWithTheirExplicitFlags() {
+    void outboundOAuthCanRunWithoutInboundBotActions() {
         contextRunner.withPropertyValues(
                 "app.wecom.enabled=true",
+                "app.security.local-login.enabled=true"
+        ).run(context -> {
+            assertThat(context).doesNotHaveBean(WeComCallbackController.class);
+            assertThat(context).hasSingleBean(WeComOAuthController.class);
+        });
+    }
+
+    @Test
+    void inboundCallbackRequiresItsDedicatedActionFlag() {
+        contextRunner.withPropertyValues(
+                "app.wecom.enabled=true",
+                "app.wecom.bot.actions-enabled=true",
                 "app.security.local-login.enabled=true"
         ).run(context -> {
             assertThat(context).hasSingleBean(WeComCallbackController.class);

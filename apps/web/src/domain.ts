@@ -2,6 +2,7 @@ import type { ApiIdentity } from './api/client'
 
 export type ViewId =
   | 'workbench'
+  | 'all-functions'
   | 'hotel-dashboard'
   | 'operations-dashboard'
   | 'work-packages'
@@ -14,6 +15,8 @@ export type ViewId =
   | 'templates'
   | 'organization'
   | 'wecom-webhooks'
+  | 'wecom-bindings'
+  | 'wecom-onboarding'
 
 export type RouteParams = Record<string, string>
 export type NavigationParams = Record<string, string | undefined>
@@ -38,6 +41,8 @@ export type IdentityAssignment = {
   positionName: string
   primary: boolean
   assignmentType: string
+  permissionCodes?: string[]
+  authorizationScopeType?: 'SELF' | 'ORG_UNIT' | 'ORG_TREE' | 'TENANT'
 }
 
 export type IdentitySnapshot = {

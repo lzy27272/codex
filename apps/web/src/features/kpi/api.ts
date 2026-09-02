@@ -141,7 +141,7 @@ export const loadKpiTemplates = (identity: RoleContext, signal?: AbortSignal) =>
   featureApiRequest<KpiTemplate[]>('/kpi/templates', identity, { signal })
 
 export const loadKpiPositions = (identity: RoleContext, signal?: AbortSignal) =>
-  featureApiRequest<KpiPositionOption[]>('/org/positions', identity, { signal })
+  featureApiRequest<KpiPositionOption[]>('/org/position-options', identity, { signal })
 
 export const loadKpiTemplate = (identity: RoleContext, templateId: string, signal?: AbortSignal) =>
   featureApiRequest<Record<string, unknown>>(`/kpi/templates/${templateId}`, identity, { signal })

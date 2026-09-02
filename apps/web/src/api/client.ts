@@ -104,17 +104,23 @@ export function createIdempotencyKey(prefix = 'web'): string {
 }
 
 function authenticationHeaders(identity: ApiIdentity): HeadersInit {
+  const assignmentHeader: Record<string, string> = {}
+  if (identity.assignmentId) assignmentHeader['X-Assignment-Id'] = identity.assignmentId
   if (AUTH_MODE === 'dev-header') {
     return {
       'X-Tenant-Id': identity.tenantId,
       'X-Actor-Id': identity.actorId,
+      ...assignmentHeader,
     }
   }
   if (AUTH_MODE === 'bearer') {
     const accessToken = ephemeralAccessToken
-    return accessToken ? { [BEARER_HEADER]: `Bearer ${accessToken}` } : {}
+    return {
+      ...(accessToken ? { [BEARER_HEADER]: `Bearer ${accessToken}` } : {}),
+      ...assignmentHeader,
+    }
   }
-  return {}
+  return assignmentHeader
 }
 
 export async function apiRequest<T>(path: string, identity: ApiIdentity, init: RequestInit = {}): Promise<T> {

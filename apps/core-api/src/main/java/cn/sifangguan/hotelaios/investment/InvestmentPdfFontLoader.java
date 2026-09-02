@@ -2,6 +2,7 @@ package cn.sifangguan.hotelaios.investment;
 
 import org.apache.fontbox.ttf.TrueTypeCollection;
 import org.apache.fontbox.ttf.TrueTypeFont;
+import org.apache.fontbox.ttf.OpenTypeFont;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
@@ -19,26 +20,26 @@ final class InvestmentPdfFontLoader {
     static FontSet load(PDDocument document) throws IOException {
         LoadedFont serif = loadFont(document, candidates("serif",
                 new FontCandidate("C:/Windows/Fonts/simsun.ttc", List.of("SimSun")),
-                new FontCandidate("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
-                        List.of("NotoSerifCJKsc-Regular")),
                 new FontCandidate("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-                        List.of("WenQuanYiZenHei"))));
+                        List.of("WenQuanYiZenHei")),
+                new FontCandidate("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+                        List.of("NotoSerifCJKsc-Regular"))));
         LoadedFont sans = loadFont(document, candidates("sans",
                 new FontCandidate("C:/Windows/Fonts/msyh.ttc", List.of("MicrosoftYaHei")),
+                new FontCandidate("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+                        List.of("WenQuanYiZenHei")),
                 new FontCandidate("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                         List.of("NotoSansCJKsc-Regular")),
                 new FontCandidate("/usr/share/fonts/opentype/noto/NotoSansCJK-VF.otf.ttc",
-                        List.of("NotoSansCJKsc-Regular")),
-                new FontCandidate("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-                        List.of("WenQuanYiZenHei"))));
+                        List.of("NotoSansCJKsc-Regular"))));
         LoadedFont bold = loadFont(document, candidates("bold",
                 new FontCandidate("C:/Windows/Fonts/msyhbd.ttc", List.of("MicrosoftYaHei-Bold")),
+                new FontCandidate("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+                        List.of("WenQuanYiZenHei")),
                 new FontCandidate("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
                         List.of("NotoSansCJKsc-Bold")),
                 new FontCandidate("/usr/share/fonts/opentype/noto/NotoSansCJK-VF.otf.ttc",
-                        List.of("NotoSansCJKsc-Bold", "NotoSansCJKsc-Regular")),
-                new FontCandidate("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-                        List.of("WenQuanYiZenHei"))));
+                        List.of("NotoSansCJKsc-Bold", "NotoSansCJKsc-Regular"))));
         return new FontSet(serif.font(), sans.font(), bold.font(),
                 List.of(serif.collection(), sans.collection(), bold.collection()));
     }
@@ -63,7 +64,11 @@ final class InvestmentPdfFontLoader {
                     collection.close();
                     continue;
                 }
-                return new LoadedFont(PDType0Font.load(document, font, true), collection);
+                // FontBox cannot subset CFF-flavoured OpenType fonts because they do not
+                // contain a TrueType "glyf" table. Ubuntu's Noto CJK TTC files commonly
+                // expose OpenTypeFont instances, so embed those fonts without subsetting.
+                boolean embedSubset = !(font instanceof OpenTypeFont);
+                return new LoadedFont(PDType0Font.load(document, font, embedSubset), collection);
             } catch (IOException | RuntimeException exception) {
                 collection.close();
                 attempts.add(candidate.path() + "（" + exception.getClass().getSimpleName() + "）");

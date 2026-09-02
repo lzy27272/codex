@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.sql.Timestamp;
 import java.util.Map;
 import java.util.UUID;
 
@@ -116,7 +117,7 @@ public class PilotAuthService {
         }
 
         UUID accountId = (UUID) account.get("id");
-        OffsetDateTime lockedUntil = (OffsetDateTime) account.get("locked_until");
+        OffsetDateTime lockedUntil = offsetDateTime(account.get("locked_until"));
         if (lockedUntil != null && lockedUntil.isAfter(OffsetDateTime.now())) {
             throw new IdentityAuthenticationException("账号暂时锁定，请15分钟后重试");
         }
@@ -153,6 +154,22 @@ public class PilotAuthService {
                 accountId,
                 String.valueOf(account.get("display_name"))
         );
+    }
+
+    private static OffsetDateTime offsetDateTime(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof OffsetDateTime offsetDateTime) {
+            return offsetDateTime;
+        }
+        if (value instanceof Timestamp timestamp) {
+            return timestamp.toInstant().atOffset(ZoneOffset.UTC);
+        }
+        if (value instanceof Instant instant) {
+            return instant.atOffset(ZoneOffset.UTC);
+        }
+        throw new IllegalStateException("不支持的账号锁定时间类型");
     }
 
     private void registerFailure(UUID tenantId, UUID accountId, int currentFailures) {

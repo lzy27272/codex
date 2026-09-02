@@ -44,6 +44,8 @@ class WeComGroupRobotWebhookIntegrationTest {
     private ObjectMapper objectMapper;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private WeComGroupRobotWebhookService service;
 
     @DynamicPropertySource
     static void databaseProperties(DynamicPropertyRegistry registry) {
@@ -75,6 +77,11 @@ class WeComGroupRobotWebhookIntegrationTest {
                 where tenant_id = ? and hotel_org_unit_id = ?
                 """, String.class, UUID.fromString(TENANT), UUID.fromString(HOTEL));
         assertThat(persisted).isNotBlank().doesNotContain("test-store-secret").isNotEqualTo(WEBHOOK);
+
+        WeComGroupRobotWebhookService.GroupRobotDestination destination =
+                service.resolveForDelivery(UUID.fromString(TENANT), UUID.fromString(HOTEL));
+        assertThat(destination.webhook().toString()).isEqualTo(WEBHOOK);
+        assertThat(destination.endpointHash()).hasSize(64).doesNotContain("test-store-secret");
 
         JsonNode allStores = json(getJson("/api/v1/integrations/wecom/group-webhooks", CEO, 200));
         JsonNode configuredStore = null;

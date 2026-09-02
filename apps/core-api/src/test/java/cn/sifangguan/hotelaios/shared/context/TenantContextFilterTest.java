@@ -80,10 +80,26 @@ class TenantContextFilterTest {
         filter.doFilter(exchange, new MockHttpServletResponse(), (req, res) -> exchangeReached.set(true));
         assertTrue(exchangeReached.get());
 
+        for (String endpoint : new String[]{"preview", "start"}) {
+            MockHttpServletRequest enrollment = new MockHttpServletRequest("POST",
+                    "/api/v1/integrations/wecom/binding-enrollment/" + endpoint);
+            AtomicReference<Boolean> enrollmentReached = new AtomicReference<>(false);
+            filter.doFilter(enrollment, new MockHttpServletResponse(),
+                    (req, res) -> enrollmentReached.set(true));
+            assertTrue(enrollmentReached.get(), endpoint + " must remain available to invitation holders");
+        }
+
         MockHttpServletRequest unsupported = new MockHttpServletRequest("DELETE",
                 "/api/v1/integrations/wecom/oauth/exchange");
         MockHttpServletResponse unsupportedResponse = new MockHttpServletResponse();
         filter.doFilter(unsupported, unsupportedResponse, (req, res) -> fail("unsupported method must remain protected"));
         assertEquals(400, unsupportedResponse.getStatus());
+
+        MockHttpServletRequest unsupportedEnrollment = new MockHttpServletRequest("GET",
+                "/api/v1/integrations/wecom/binding-enrollment/preview");
+        MockHttpServletResponse unsupportedEnrollmentResponse = new MockHttpServletResponse();
+        filter.doFilter(unsupportedEnrollment, unsupportedEnrollmentResponse,
+                (req, res) -> fail("unsupported enrollment method must remain protected"));
+        assertEquals(400, unsupportedEnrollmentResponse.getStatus());
     }
 }

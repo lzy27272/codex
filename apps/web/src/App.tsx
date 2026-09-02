@@ -674,17 +674,25 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
       setError(reason instanceof Error ? reason.message : '登录失败')
     } finally { setBusy(false) }
   }
-  return <main className="login-screen">
-    <section className="login-brand"><div className="login-logo">四</div><div><span className="eyebrow">HOTEL AI OS · PILOT</span><h1>{product.name}</h1><p>以真实账号进入门店管理闭环。系统按组织、任职与角色自动隔离数据。</p></div></section>
-    <form className="login-card" onSubmit={submit}>
-      <header><span className="panel-kicker">INTERNAL PILOT ACCESS</span><h2>内部测试登录</h2><p>请输入管理员分配的测试账号和初始密码。</p></header>
-      <label>登录账号<input autoFocus autoComplete="username" value={loginName} onChange={(event) => setLoginName(event.target.value)} placeholder="例如 gm.hz" /></label>
-      <label>登录密码<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 位" /></label>
-      {error && <div className="inline-error">{error}</div>}
-      <button className="primary login-submit" disabled={busy || !loginName.trim() || !password}>{busy ? '正在验证…' : '登录中台'}</button>
-      <small>内部测试系统 · 所有关键操作记录账号、组织和时间</small>
-    </form>
-    {icpRecordNumber && <a className="icp-record login-icp" href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">{icpRecordNumber}</a>}
+  return <main className="login-auth-screen">
+    <div className="login-auth-layout">
+      <section className="login-auth-brand" aria-label={product.name}>
+        <div className="login-auth-brandmark"><div>四</div><span><strong>{product.shortName}</strong><small>{product.editionLabel}</small></span></div>
+        <div className="login-auth-intro"><h1>{product.name}</h1><p>以真实账号进入门店管理闭环。系统按组织、任职与角色自动隔离数据。</p></div>
+        <small className="login-auth-version">{product.version}</small>
+      </section>
+      <section className="login-auth-panel">
+        <form className="login-auth-card" aria-label="中台账号登录" aria-busy={busy} onSubmit={submit}>
+          <header><h2>账号登录</h2><p>请输入管理员分配的测试账号和初始密码。</p></header>
+          <label>登录账号<input name="username" autoFocus autoComplete="username" disabled={busy} aria-invalid={Boolean(error)} aria-describedby={error ? 'login-error' : undefined} value={loginName} onChange={(event) => setLoginName(event.target.value)} placeholder="请输入登录账号" /></label>
+          <label>登录密码<input name="password" type="password" autoComplete="current-password" disabled={busy} aria-invalid={Boolean(error)} aria-describedby={error ? 'login-error' : undefined} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="请输入登录密码" /></label>
+          {error && <div id="login-error" className="inline-error" role="alert" aria-live="polite">{error}</div>}
+          <button className="primary login-auth-submit" disabled={busy || !loginName.trim() || !password}>{busy ? '正在验证…' : '登录中台'}</button>
+          <small>内部测试系统 · 关键操作均记录账号、组织和时间</small>
+        </form>
+        {icpRecordNumber && <a className="icp-record login-auth-icp" href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">{icpRecordNumber}</a>}
+      </section>
+    </div>
   </main>
 }
 

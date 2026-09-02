@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 api_pid=''
+migration_port=18082
 cleanup() {
   if test -n "${api_pid}" && kill -0 "${api_pid}" 2>/dev/null; then
     kill -TERM "${api_pid}" 2>/dev/null || true
@@ -10,13 +11,18 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+if /usr/bin/ss -H -ltn | /usr/bin/grep -Eq ":${migration_port}[[:space:]]"; then
+  printf 'Migration port %s is already in use.\n' "${migration_port}" >&2
+  exit 1
+fi
+
 /usr/bin/java \
   -Xms256m \
   -Xmx1024m \
   -XX:+ExitOnOutOfMemoryError \
   -jar /opt/hotel-ai-os/current/core-api.jar \
   --server.address=127.0.0.1 \
-  --server.port=18081 &
+  --server.port="${migration_port}" &
 api_pid=$!
 
 migration_ready=false
@@ -26,7 +32,7 @@ for _attempt in $(seq 1 60); do
     exit $?
   fi
   if /usr/bin/curl --fail --silent --show-error \
-      http://127.0.0.1:18081/actuator/health >/dev/null; then
+      "http://127.0.0.1:${migration_port}/actuator/health" >/dev/null; then
     migration_ready=true
     break
   fi

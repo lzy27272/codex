@@ -94,4 +94,3 @@ public class WeComDirectorySecretCodec {
         return value.trim();
     }
 }
-

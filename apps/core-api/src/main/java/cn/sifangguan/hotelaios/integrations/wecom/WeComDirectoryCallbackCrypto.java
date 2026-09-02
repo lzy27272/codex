@@ -105,4 +105,3 @@ public class WeComDirectoryCallbackCrypto {
 
     private static boolean blank(String value) { return value == null || value.isBlank(); }
 }
-

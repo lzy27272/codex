@@ -105,4 +105,3 @@ public class WeComDirectoryXml {
 
     private static String lower(String value) { return value.toLowerCase(Locale.ROOT); }
 }
-

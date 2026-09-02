@@ -44,4 +44,3 @@ public class WeComDirectoryCallbackController {
         return service.receive(signature, timestamp, nonce, encryptedEnvelope);
     }
 }
-

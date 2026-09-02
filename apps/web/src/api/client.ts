@@ -20,7 +20,11 @@ export class ApiError extends Error {
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '/api/v1').replace(/\/$/, '')
 const AUTH_MODE = import.meta.env.VITE_AUTH_MODE ?? (import.meta.env.DEV ? 'dev-header' : 'server')
-const BEARER_HEADER = import.meta.env.VITE_BEARER_HEADER ?? 'Authorization'
+// Public traffic passes through Caddy, which promotes this non-standard header to
+// Authorization before proxying to Core API. Keep the value configurable for
+// direct deployments, but default to the production proxy contract so a release
+// build cannot silently log users out after a successful login.
+const BEARER_HEADER = import.meta.env.VITE_BEARER_HEADER ?? 'X-Hotel-AI-Authorization'
 const UAT_ACCESS_TOKEN_STORAGE_KEY = 'hotel-ai-os-access-token'
 const FEDERATED_SESSION_STORAGE_KEY = 'hotel-ai-os-federated-session'
 const TENANT_ID = import.meta.env.VITE_TENANT_ID ?? '10000000-0000-0000-0000-000000000001'

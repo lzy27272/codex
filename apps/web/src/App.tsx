@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { apiCommand, apiRequest, authMode, changePassword, clearAccessToken, demoFallbackEnabled, hasAccessToken, login } from './api/client'
 import { consumeLogoutEntry } from './app/logoutEntry'
+import { bootstrapAssignmentId, bootstrapAssignments, canLoadSecondaryResources } from './app/authBootstrap'
 import {
   addWorkRecordSupplement,
   createWorkRecordDraft,
@@ -38,6 +39,7 @@ import type {
   ManagementRule,
   ManagementTask,
   Navigate,
+  NotificationItem,
   RouteParams,
   RuleDetail,
   RuleVersionDraft,
@@ -732,7 +734,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     permissions: [],
     tenantScope: false,
     orgScopes: identity.orgScopes,
-    assignments: identity.assignmentId ? [{
+    assignments: bootstrapAssignments(authMode, identity.assignmentId ? [{
       id: identity.assignmentId,
       orgUnitId: identity.orgScopes[0] ?? '',
       orgName: identity.orgName,
@@ -741,15 +743,15 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       positionName: identity.label,
       primary: true,
       assignmentType: 'PERMANENT',
-    }] : [],
+    }] : []),
   }), [identity])
   const me = useResource(`${identity.key}:me`, () => loadIdentity(identity, fallbackIdentity), fallbackIdentity)
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState(identity.assignmentId ?? '')
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState(() => bootstrapAssignmentId(authMode, identity.assignmentId))
   const [changingPassword, setChangingPassword] = useState(false)
   const compatibleAssignments = useMemo(() => me.data.assignments, [me.data.assignments])
   useEffect(() => {
     const preferred = compatibleAssignments.find((item) => item.primary) ?? compatibleAssignments[0]
-    setSelectedAssignmentId(preferred?.id ?? (authMode === 'bearer' ? '' : identity.assignmentId ?? ''))
+    setSelectedAssignmentId(preferred?.id ?? bootstrapAssignmentId(authMode, identity.assignmentId))
   }, [identity.key, compatibleAssignments])
   const selectedAssignment = compatibleAssignments.find((item) => item.id === selectedAssignmentId)
     ?? compatibleAssignments.find((item) => item.primary)
@@ -767,8 +769,8 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     employeeId: me.data.employeeId,
     assignmentOrgUnitId: isFullAccountLevel ? undefined : selectedAssignment?.orgUnitId,
     roleCode: isFullAccountLevel ? me.data.primaryRoleCode : selectedRoleContext?.roleCode ?? (me.data.primaryRoleCode || identity.roleCode),
-    orgScopes: authMode === 'bearer' ? me.data.orgScopes : me.data.orgScopes.length ? me.data.orgScopes : identity.orgScopes,
-    assignmentId: isFullAccountLevel ? undefined : selectedAssignment?.id ?? (authMode === 'bearer' ? undefined : identity.assignmentId),
+    orgScopes: authMode === 'dev-header' && !me.data.orgScopes.length ? identity.orgScopes : me.data.orgScopes,
+    assignmentId: isFullAccountLevel ? undefined : selectedAssignment?.id ?? (authMode === 'dev-header' ? identity.assignmentId : undefined),
     label: isFullAccountLevel ? resolvedRoleContext?.label ?? identity.label : selectedAssignment?.positionName ?? resolvedRoleContext?.label ?? identity.label,
     orgName: isFullAccountLevel ? resolvedRoleContext?.orgName ?? identity.orgName : selectedAssignment?.orgName ?? resolvedRoleContext?.orgName ?? identity.orgName,
     focus: resolvedRoleContext?.focus ?? identity.focus,
@@ -782,7 +784,15 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       navigate('kpi-center')
     }
   }, [isPlatformAdmin, me.loading, me.error, route.explicit, view, navigate])
-  const unreadResource = useResource(`${identity.key}:sidebar-notices`, () => loadNotifications(activeIdentity), [], 15_000)
+  const secondaryIdentityReady = canLoadSecondaryResources(authMode, me.loading, me.error)
+  const unreadResource = useResource<NotificationItem[]>(
+    `${activeIdentity.key}:sidebar-notices:${secondaryIdentityReady ? 'ready' : 'pending'}`,
+    async () => secondaryIdentityReady
+      ? loadNotifications(activeIdentity)
+      : { data: [], source: 'api' as const },
+    [],
+    15_000,
+  )
   const unreadCount = unreadResource.data.filter((item) => !item.readAt).length
   const pilotDemoMode = demoFallbackEnabled && me.source === 'demo'
   const visibleNavigation = navigation.filter((item) => {

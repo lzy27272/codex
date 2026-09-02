@@ -91,7 +91,10 @@ class OrganizationMaintenanceIntegrationTest {
 
         assertThat(count("org_unit", orgId)).isZero();
         assertThat(count("position_definition", positionId)).isZero();
-        assertThat(count("employee", employeeId)).isZero();
+        assertThat(count("employee", employeeId)).isOne();
+        assertThat(jdbc.queryForObject(
+                "select deleted_at is not null from employee where id = ?", Boolean.class, employeeId
+        )).isTrue();
     }
 
     @Test
@@ -135,7 +138,54 @@ class OrganizationMaintenanceIntegrationTest {
                 """.formatted(suffix, suffix.toLowerCase()), 200);
         assertThat(jdbc.queryForObject("select status from user_account where id = ?", String.class, accountId))
                 .isEqualTo("INACTIVE");
-        deleteJson("/api/v1/org/employees/" + employeeId, CEO, 400);
+        deleteJson("/api/v1/org/employees/" + employeeId, CEO, 204);
+        assertThat(jdbc.queryForObject(
+                "select deleted_at is not null from employee where id = ?", Boolean.class, employeeId
+        )).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from employee_position_assignment where employee_id = ?", Integer.class, employeeId
+        )).isOne();
+
+        postJson("/api/v1/org/employees/" + employeeId + "/restore", CEO, "{}");
+        assertThat(jdbc.queryForObject(
+                "select deleted_at is null from employee where id = ?", Boolean.class, employeeId
+        )).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select employment_status from employee where id = ?", String.class, employeeId
+        )).isEqualTo("INACTIVE");
+
+        deleteJson("/api/v1/org/employees/" + employeeId, CEO, 204);
+        deleteJson("/api/v1/org/employees/" + employeeId + "/permanent", CEO, 204);
+        assertThat(jdbc.queryForObject(
+                "select permanently_deleted_at is not null from employee where id = ?", Boolean.class, employeeId
+        )).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select name from employee where id = ?", String.class, employeeId
+        )).isEqualTo("已永久删除员工");
+        assertThat(jdbc.queryForObject(
+                "select login_name like 'purged-%' from user_account where id = ?", Boolean.class, accountId
+        )).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select password_hash is null from user_account where id = ?", Boolean.class, accountId
+        )).isTrue();
+    }
+
+    @Test
+    void administratorCanMoveAllInactiveEmployeesToRecycleBin() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        UUID employeeId = UUID.fromString(json(postJson("/api/v1/org/employees", CEO, """
+                {"employeeNo":"BULK-EMP-%s","name":"批量删除测试员工","hiredOn":"2026-07-19"}
+                """.formatted(suffix))).path("id").asText());
+        putJson("/api/v1/org/employees/" + employeeId, CEO, """
+                {"employeeNo":"BULK-EMP-%s","name":"批量删除测试员工","hiredOn":"2026-07-19","employmentStatus":"INACTIVE"}
+                """.formatted(suffix), 200);
+
+        JsonNode response = json(postJson("/api/v1/org/employees/actions/delete-inactive", CEO, "{}"));
+
+        assertThat(response.path("deletedCount").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "select deleted_at is not null from employee where id = ?", Boolean.class, employeeId
+        )).isTrue();
     }
 
     @Test

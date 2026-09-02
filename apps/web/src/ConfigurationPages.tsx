@@ -5,7 +5,7 @@ import type { RoleContext } from './domain'
 type Row = Record<string, unknown>
 type OrgUnit = { id: string; parentId?: string; code: string; name: string; unitType: string; status: string; sortOrder: number; propertyCode?: string; city?: string; roomCount?: number; openingDate?: string }
 type Position = { id: string; code: string; name: string; jobFamily: string; levelCode?: string; status: string }
-type Employee = { id: string; accountId?: string; loginName?: string; employeeNo: string; name: string; mobile?: string; hiredOn?: string; employmentStatus: string; accountStatus?: string; assignmentId?: string; orgUnitId?: string; orgUnitName?: string; positionId?: string; positionName?: string; primary?: boolean }
+type Employee = { id: string; accountId?: string; loginName?: string; employeeNo: string; name: string; mobile?: string; hiredOn?: string; employmentStatus: string; accountStatus?: string; assignmentId?: string; orgUnitId?: string; orgUnitName?: string; positionId?: string; positionName?: string; primary?: boolean; deletedAt?: string; deletedByName?: string }
 type Role = { id: string; code: string; name: string }
 type PackageRow = { id: string; code: string; name: string; positionName: string; lifecycleStatus: string; versionNo: number; latestVersionId?: string; ownerOrgName?: string }
 type SelectRow = { id: string; code: string; name: string; status?: string; versionId?: string; positionId?: string }
@@ -14,16 +14,34 @@ type AllocationRow = { id: string; assignmentId: string; targetOrgName: string; 
 const field = (row: Row, ...keys: string[]) => keys.map((key) => row[key]).find((value) => value !== undefined && value !== null)
 const text = (row: Row, ...keys: string[]) => String(field(row, ...keys) ?? '')
 const bool = (row: Row, ...keys: string[]) => Boolean(field(row, ...keys))
+const dateTimeFormatter = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
+const formatDateTime = (value?: string) => value ? dateTimeFormatter.format(new Date(value)) : '—'
+const mapEmployee = (row: Row): Employee => ({
+  id: text(row, 'id'), accountId: text(row, 'account_id', 'accountId') || undefined,
+  loginName: text(row, 'login_name', 'loginName') || undefined, employeeNo: text(row, 'employee_no', 'employeeNo'),
+  name: text(row, 'name'), mobile: text(row, 'mobile') || undefined,
+  hiredOn: text(row, 'hired_on', 'hiredOn') || undefined,
+  employmentStatus: text(row, 'employment_status', 'employmentStatus') || 'ACTIVE',
+  accountStatus: text(row, 'account_status', 'accountStatus') || undefined,
+  assignmentId: text(row, 'assignment_id', 'assignmentId') || undefined,
+  orgUnitId: text(row, 'org_unit_id', 'orgUnitId') || undefined, orgUnitName: text(row, 'org_unit_name', 'orgUnitName') || undefined,
+  positionId: text(row, 'position_id', 'positionId') || undefined, positionName: text(row, 'position_name', 'positionName') || undefined,
+  primary: bool(row, 'is_primary', 'primary'),
+  deletedAt: text(row, 'deleted_at', 'deletedAt') || undefined,
+  deletedByName: text(row, 'deleted_by_name', 'deletedByName') || undefined,
+})
 const jsonObject = (candidate: unknown): Row => {
   if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) return candidate as Row
   if (typeof candidate === 'string') { try { const parsed: unknown = JSON.parse(candidate); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Row : {} } catch { return {} } }
   return {}
 }
 
-async function loadSetup(identity: RoleContext, includeRoles: boolean) {
-  const [orgRaw, positionRaw, employeeRaw, roleRaw] = await Promise.all([
+async function loadSetup(identity: RoleContext, includeRoles: boolean, includeDeleted = false) {
+  const [orgRaw, positionRaw, employeeRaw, deletedEmployeeRaw, roleRaw] = await Promise.all([
     apiRequest<unknown>('/org/units', identity), apiRequest<unknown>('/org/positions', identity),
-    apiRequest<unknown>('/org/employees', identity), includeRoles ? apiRequest<unknown>('/iam/roles', identity) : Promise.resolve([]),
+    apiRequest<unknown>('/org/employees', identity),
+    includeDeleted ? apiRequest<unknown>('/org/employees/deleted', identity) : Promise.resolve([]),
+    includeRoles ? apiRequest<unknown>('/iam/roles', identity) : Promise.resolve([]),
   ])
   const orgUnits = asList<Row>(orgRaw).map((row): OrgUnit => ({
     id: text(row, 'id'), parentId: text(row, 'parent_id', 'parentId') || undefined,
@@ -38,20 +56,10 @@ async function loadSetup(identity: RoleContext, includeRoles: boolean) {
     jobFamily: text(row, 'job_family', 'jobFamily'), levelCode: text(row, 'level_code', 'levelCode') || undefined,
     status: text(row, 'status') || 'ACTIVE',
   }))
-  const employees = asList<Row>(employeeRaw).map((row): Employee => ({
-    id: text(row, 'id'), accountId: text(row, 'account_id', 'accountId') || undefined,
-    loginName: text(row, 'login_name', 'loginName') || undefined, employeeNo: text(row, 'employee_no', 'employeeNo'),
-    name: text(row, 'name'), mobile: text(row, 'mobile') || undefined,
-    hiredOn: text(row, 'hired_on', 'hiredOn') || undefined,
-    employmentStatus: text(row, 'employment_status', 'employmentStatus') || 'ACTIVE',
-    accountStatus: text(row, 'account_status', 'accountStatus') || undefined,
-    assignmentId: text(row, 'assignment_id', 'assignmentId') || undefined,
-    orgUnitId: text(row, 'org_unit_id', 'orgUnitId') || undefined, orgUnitName: text(row, 'org_unit_name', 'orgUnitName') || undefined,
-    positionId: text(row, 'position_id', 'positionId') || undefined, positionName: text(row, 'position_name', 'positionName') || undefined,
-    primary: bool(row, 'is_primary', 'primary'),
-  }))
+  const employees = asList<Row>(employeeRaw).map(mapEmployee)
+  const deletedEmployees = asList<Row>(deletedEmployeeRaw).map(mapEmployee)
   const roles = asList<Row>(roleRaw).map((row): Role => ({ id: text(row, 'id'), code: text(row, 'code'), name: text(row, 'name') }))
-  return { orgUnits, positions, employees, roles }
+  return { orgUnits, positions, employees, deletedEmployees, roles }
 }
 
 function Modal({ title, children, onClose, onSave, saving, saveLabel = '保存' }: { title: string; children: React.ReactNode; onClose: () => void; onSave: () => void; saving: boolean; saveLabel?: string }) {
@@ -65,13 +73,15 @@ function Modal({ title, children, onClose, onSave, saving, saveLabel = '保存' 
 export function OrganizationCenter({ identity, permissions }: { identity: RoleContext; permissions: string[] }) {
   const canManage = permissions.includes('org.manage') || permissions.includes('*')
   const canGrant = permissions.includes('iam.manage') || permissions.includes('*')
-  const [data, setData] = useState<{ orgUnits: OrgUnit[]; positions: Position[]; employees: Employee[]; roles: Role[] }>({ orgUnits: [], positions: [], employees: [], roles: [] })
+  const [data, setData] = useState<{ orgUnits: OrgUnit[]; positions: Position[]; employees: Employee[]; deletedEmployees: Employee[]; roles: Role[] }>({ orgUnits: [], positions: [], employees: [], deletedEmployees: [], roles: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
+  const [notice, setNotice] = useState<string>()
   const [modal, setModal] = useState<'org' | 'position' | 'employee' | 'assignment'>()
   const [editingId, setEditingId] = useState<string>()
   const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState<'org' | 'position' | 'employee'>('org')
+  const [employeeView, setEmployeeView] = useState<'current' | 'deleted'>('current')
   const [orgForm, setOrgForm] = useState({ unitType: 'HOTEL', parentId: '', code: '', name: '', propertyCode: '', city: '', roomCount: '', openingDate: '', sortOrder: '0', status: 'ACTIVE' })
   const [positionForm, setPositionForm] = useState({ code: '', name: '', jobFamily: '酒店运营', levelCode: '', status: 'ACTIVE' })
   const [employeeForm, setEmployeeForm] = useState({ employeeNo: '', name: '', mobile: '', hiredOn: new Date().toISOString().slice(0, 10), loginName: '', temporaryPassword: '', employmentStatus: 'ACTIVE' })
@@ -79,10 +89,10 @@ export function OrganizationCenter({ identity, permissions }: { identity: RoleCo
 
   const reload = async () => {
     setLoading(true); setError(undefined)
-    try { setData(await loadSetup(identity, canGrant)) } catch (reason) { setError(reason instanceof Error ? reason.message : '组织数据加载失败') }
+    try { setData(await loadSetup(identity, canGrant, canManage)) } catch (reason) { setError(reason instanceof Error ? reason.message : '组织数据加载失败') }
     finally { setLoading(false) }
   }
-  useEffect(() => { void reload() }, [identity.key, canGrant])
+  useEffect(() => { void reload() }, [identity.key, canGrant, canManage])
   const orgDepth = useMemo(() => {
     const byId = new Map(data.orgUnits.map((item) => [item.id, item]))
     const depth = (item: OrgUnit) => { let result = 0; let current = item; const seen = new Set<string>(); while (current.parentId && byId.has(current.parentId) && !seen.has(current.id)) { seen.add(current.id); result += 1; current = byId.get(current.parentId)! } return result }
@@ -93,6 +103,7 @@ export function OrganizationCenter({ identity, permissions }: { identity: RoleCo
     for (const employee of data.employees) grouped.set(employee.id, [...(grouped.get(employee.id) ?? []), employee])
     return [...grouped.values()].map((rows) => rows.find((row) => row.primary) ?? rows[0])
   }, [data.employees])
+  const inactiveEmployeeCount = useMemo(() => primaryEmployees.filter((item) => item.employmentStatus === 'INACTIVE').length, [primaryEmployees])
 
   const closeModal = () => { setModal(undefined); setEditingId(undefined) }
   const openCreate = (kind: 'org' | 'position' | 'employee') => {
@@ -120,18 +131,36 @@ export function OrganizationCenter({ identity, permissions }: { identity: RoleCo
   const orgBody = (form = orgForm) => ({ code: form.code, name: form.name, sortOrder: form.sortOrder ? Number(form.sortOrder) : 0, status: form.status, propertyCode: form.unitType === 'HOTEL' ? form.propertyCode : null, city: form.unitType === 'HOTEL' ? form.city || null : null, roomCount: form.unitType === 'HOTEL' && form.roomCount ? Number(form.roomCount) : null, openingDate: form.unitType === 'HOTEL' ? form.openingDate || null : null })
   const positionBody = (form = positionForm) => ({ code: form.code, name: form.name, jobFamily: form.jobFamily, levelCode: form.levelCode || null, status: form.status })
   const employeeBody = (form = employeeForm) => ({ employeeNo: form.employeeNo, name: form.name, mobile: form.mobile || null, hiredOn: form.hiredOn || null, employmentStatus: form.employmentStatus, loginName: form.loginName || null, temporaryPassword: form.temporaryPassword || null })
-  const runMaintenance = async (request: () => Promise<unknown>, fallback: string) => {
-    setSaving(true); setError(undefined)
-    try { await request(); await reload() }
-    catch (reason) { setError(reason instanceof Error ? reason.message : fallback) }
+  const runMaintenance = async (request: () => Promise<unknown>, fallback: string, success?: string) => {
+    setSaving(true); setError(undefined); setNotice(undefined)
+    try { await request(); await reload(); if (success) setNotice(success); return true }
+    catch (reason) { setError(reason instanceof Error ? reason.message : fallback); return false }
     finally { setSaving(false) }
   }
   const toggleOrg = (item: OrgUnit) => runMaintenance(() => apiRequest(`/org/units/${item.id}`, identity, { method: 'PUT', body: JSON.stringify(orgBody({ ...orgForm, unitType: item.unitType, code: item.code, name: item.name, sortOrder: String(item.sortOrder), status: item.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', propertyCode: item.propertyCode ?? '', city: item.city ?? '', roomCount: item.roomCount === undefined ? '' : String(item.roomCount), openingDate: item.openingDate ?? '', parentId: item.parentId ?? '' })) }), '组织状态修改失败')
   const togglePosition = (item: Position) => runMaintenance(() => apiRequest(`/org/positions/${item.id}`, identity, { method: 'PUT', body: JSON.stringify(positionBody({ code: item.code, name: item.name, jobFamily: item.jobFamily, levelCode: item.levelCode ?? '', status: item.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' })) }), '岗位状态修改失败')
   const toggleEmployee = (item: Employee) => runMaintenance(() => apiRequest(`/org/employees/${item.id}`, identity, { method: 'PUT', body: JSON.stringify(employeeBody({ employeeNo: item.employeeNo, name: item.name, mobile: item.mobile ?? '', hiredOn: item.hiredOn ?? '', loginName: item.loginName ?? '', temporaryPassword: '', employmentStatus: item.employmentStatus === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE' })) }), '员工状态修改失败')
-  const deleteMasterData = async (kind: 'units' | 'positions' | 'employees', id: string, name: string) => {
+  const deleteMasterData = async (kind: 'units' | 'positions', id: string, name: string) => {
     if (!window.confirm(`确认永久删除“${name}”？\n\n仅未被业务数据引用且已停用的数据允许删除；有历史记录的数据会被系统拒绝。`)) return
     await runMaintenance(() => apiRequest(`/org/${kind}/${id}`, identity, { method: 'DELETE' }), '删除失败')
+  }
+  const deleteEmployee = async (item: Employee) => {
+    if (!window.confirm(`确认将“${item.name}”移入“已删除”？\n\n账号、任职、角色和企业微信绑定将立即停用；业务与审计历史保留，可在“已删除”中恢复员工。`)) return
+    await runMaintenance(() => apiRequest(`/org/employees/${item.id}`, identity, { method: 'DELETE' }), '删除员工失败', `“${item.name}”已移入“已删除”`)
+  }
+  const deleteAllInactiveEmployees = async () => {
+    if (inactiveEmployeeCount === 0) return
+    if (!window.confirm(`确认将当前范围内 ${inactiveEmployeeCount} 名已停用员工全部移入“已删除”？\n\n不会影响启用中的员工；账号、任职、角色和企业微信绑定保持停用，之后仍可逐人恢复。`)) return
+    if (await runMaintenance(() => apiRequest('/org/employees/actions/delete-inactive', identity, { method: 'POST', body: '{}' }), '批量删除已停用员工失败', `已将 ${inactiveEmployeeCount} 名已停用员工移入“已删除”`)) setEmployeeView('deleted')
+  }
+  const restoreEmployee = async (item: Employee) => {
+    if (!window.confirm(`确认恢复“${item.name}”？\n\n恢复后员工和账号仍保持停用，需要核对身份后再手动启用并重新分配任职。`)) return
+    if (await runMaintenance(() => apiRequest(`/org/employees/${item.id}/restore`, identity, { method: 'POST', body: '{}' }), '恢复员工失败', `“${item.name}”已恢复并保持停用`)) setEmployeeView('current')
+  }
+  const permanentlyDeleteEmployee = async (item: Employee) => {
+    const confirmation = window.prompt(`永久删除不可撤销。系统将清除“${item.name}”的账号身份与个人信息，只保留匿名业务和审计历史。\n\n请输入员工编号 ${item.employeeNo} 确认：`)
+    if (confirmation !== item.employeeNo) return
+    await runMaintenance(() => apiRequest(`/org/employees/${item.id}/permanent`, identity, { method: 'DELETE' }), '永久删除员工失败', `“${item.name}”已永久删除，无法找回`)
   }
   const submit = async () => {
     setSaving(true); setError(undefined)
@@ -161,12 +190,29 @@ export function OrganizationCenter({ identity, permissions }: { identity: RoleCo
   return <section className="page-section configuration-page">
     <header className="page-title"><div><span className="eyebrow">ORGANIZATION & ACCESS</span><h1>组织、岗位与人员</h1><p>集团统一配置，门店账号只读取授权组织树；同一员工可绑定多个任职。</p></div><div className="page-actions"><span className="source-flag api">真实 PostgreSQL</span></div></header>
     <div className="config-tabs"><button className={tab === 'org' ? 'active' : ''} onClick={() => setTab('org')}>门店与部门</button><button className={tab === 'position' ? 'active' : ''} onClick={() => setTab('position')}>岗位字典</button><button className={tab === 'employee' ? 'active' : ''} onClick={() => setTab('employee')}>人员与任职</button></div>
+    {notice && <div className="inline-success page-success">{notice}</div>}
     {error && <div className="inline-error page-error">{error}</div>}
     {loading ? <div className="state-card"><div className="spinner" /><strong>正在读取组织权限数据</strong></div> : <article className="panel table-panel config-panel">
-      <header><div><span className="panel-kicker">{tab.toUpperCase()}</span><h2>{tab === 'org' ? '组织层级' : tab === 'position' ? '岗位定义' : '员工账号与多岗位任职'}</h2></div>{canManage && <div className="panel-actions">{tab === 'employee' && <button className="secondary" onClick={() => { setEditingId(undefined); setModal('assignment') }}>＋ 分配任职</button>}<button className="primary" onClick={() => openCreate(tab === 'org' ? 'org' : tab === 'position' ? 'position' : 'employee')}>＋ 新建{tab === 'org' ? '组织' : tab === 'position' ? '岗位' : '员工'}</button></div>}</header>
+      <header><div><span className="panel-kicker">{tab.toUpperCase()}</span><h2>{tab === 'org' ? '组织层级' : tab === 'position' ? '岗位定义' : employeeView === 'current' ? '员工账号与多岗位任职' : '已删除员工'}</h2></div>{canManage && (tab !== 'employee' || employeeView === 'current') && <div className="panel-actions">{tab === 'employee' && <button className="secondary" onClick={() => { setEditingId(undefined); setModal('assignment') }}>＋ 分配任职</button>}<button className="primary" onClick={() => openCreate(tab === 'org' ? 'org' : tab === 'position' ? 'position' : 'employee')}>＋ 新建{tab === 'org' ? '组织' : tab === 'position' ? '岗位' : '员工'}</button></div>}</header>
       {tab === 'org' && <div className="config-list">{data.orgUnits.map((item) => <div className={`config-row ${item.status === 'INACTIVE' ? 'inactive-row' : ''}`} key={item.id} style={{ paddingLeft: `${18 + (orgDepth.get(item.id) ?? 0) * 28}px` }}><i className={`org-icon ${item.unitType.toLowerCase()}`}>{item.unitType === 'HOTEL' ? '店' : item.unitType === 'DEPARTMENT' ? '部' : item.unitType === 'REGION' ? '区' : '集'}</i><span><strong>{item.name}</strong><small>{item.code} · {item.unitType}{item.city ? ` · ${item.city}` : ''}{item.roomCount !== undefined ? ` · ${item.roomCount}间` : ''}</small></span><b className={item.status === 'INACTIVE' ? 'inactive' : ''}>{item.status === 'ACTIVE' ? '启用' : '已停用'}</b>{canManage && <div className="maintenance-actions"><button className="text-action" onClick={() => openOrgEdit(item)}>编辑</button>{item.unitType !== 'GROUP' && <button className="text-action" disabled={saving} onClick={() => void toggleOrg(item)}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button>}<button className="text-action danger" disabled={saving || item.status === 'ACTIVE' || item.unitType === 'GROUP'} title={item.status === 'ACTIVE' ? '请先停用后再删除' : '仅无历史引用的数据可删除'} onClick={() => void deleteMasterData('units', item.id, item.name)}>删除</button></div>}</div>)}</div>}
       {tab === 'position' && <div className="simple-table maintenance-table"><div className="simple-head"><span>岗位编码</span><span>岗位名称</span><span>职族</span><span>职级</span><span>状态与操作</span></div>{data.positions.map((item) => <div className={item.status === 'INACTIVE' ? 'inactive-row' : ''} key={item.id}><span>{item.code}</span><strong>{item.name}</strong><span>{item.jobFamily}</span><span>{item.levelCode || '—'}</span><span className="table-maintenance"><b className={`status-pill ${item.status.toLowerCase()}`}>{item.status === 'ACTIVE' ? '启用' : '已停用'}</b>{canManage && <span className="maintenance-actions"><button className="text-action" onClick={() => openPositionEdit(item)}>编辑</button><button className="text-action" disabled={saving} onClick={() => void togglePosition(item)}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button><button className="text-action danger" disabled={saving || item.status === 'ACTIVE'} title={item.status === 'ACTIVE' ? '请先停用后再删除' : '仅无历史引用的数据可删除'} onClick={() => void deleteMasterData('positions', item.id, item.name)}>删除</button></span>}</span></div>)}</div>}
-      {tab === 'employee' && <div className="simple-table employees-table maintenance-table"><div className="simple-head"><span>员工</span><span>登录账号</span><span>组织</span><span>岗位</span><span>任职</span><span>状态与操作</span></div>{data.employees.map((item) => <div className={item.employmentStatus === 'INACTIVE' ? 'inactive-row' : ''} key={`${item.id}:${item.assignmentId ?? 'none'}`}><span><strong>{item.name}</strong><small>{item.employeeNo}</small></span><span>{item.loginName || '未开通'}</span><span>{item.orgUnitName || '待分配'}</span><span>{item.positionName || '待分配'}</span><span>{item.primary ? '主岗' : item.assignmentId ? '兼岗' : '—'}</span><span className="table-maintenance"><b className={`status-pill ${item.employmentStatus.toLowerCase()}`}>{item.employmentStatus === 'ACTIVE' ? '启用' : '已停用'}</b>{canManage && <span className="maintenance-actions"><button className="text-action" onClick={() => openEmployeeEdit(item)}>编辑</button><button className="text-action" disabled={saving} onClick={() => void toggleEmployee(item)}>{item.employmentStatus === 'ACTIVE' ? '停用' : '启用'}</button><button className="text-action danger" disabled={saving || item.employmentStatus === 'ACTIVE'} title={item.employmentStatus === 'ACTIVE' ? '请先停用后再删除' : '仅无历史引用的数据可删除'} onClick={() => void deleteMasterData('employees', item.id, item.name)}>删除</button></span>}</span></div>)}</div>}
+      {tab === 'employee' && <>
+        {canManage && <div className="employee-view-toolbar">
+          <div className="employee-view-tabs" role="tablist" aria-label="员工数据范围">
+            <button className={employeeView === 'current' ? 'active' : ''} role="tab" aria-selected={employeeView === 'current'} onClick={() => setEmployeeView('current')}>人员列表</button>
+            <button className={employeeView === 'deleted' ? 'active' : ''} role="tab" aria-selected={employeeView === 'deleted'} onClick={() => setEmployeeView('deleted')}>已删除 <span>{data.deletedEmployees.length}</span></button>
+          </div>
+          {employeeView === 'current' && inactiveEmployeeCount > 0 && <button className="secondary danger-action" disabled={saving} onClick={() => void deleteAllInactiveEmployees()}>删除全部已停用（{inactiveEmployeeCount}）</button>}
+        </div>}
+        {employeeView === 'current' && <div className="simple-table employees-table maintenance-table"><div className="simple-head"><span>员工</span><span>登录账号</span><span>组织</span><span>岗位</span><span>任职</span><span>状态与操作</span></div>{data.employees.map((item) => <div className={item.employmentStatus === 'INACTIVE' ? 'inactive-row' : ''} key={`${item.id}:${item.assignmentId ?? 'none'}`}><span><strong>{item.name}</strong><small>{item.employeeNo}</small></span><span>{item.loginName || '未开通'}</span><span>{item.orgUnitName || '待分配'}</span><span>{item.positionName || '待分配'}</span><span>{item.primary ? '主岗' : item.assignmentId ? '兼岗' : '—'}</span><span className="table-maintenance"><b className={`status-pill ${item.employmentStatus.toLowerCase()}`}>{item.employmentStatus === 'ACTIVE' ? '启用' : '已停用'}</b>{canManage && <span className="maintenance-actions"><button className="text-action" onClick={() => openEmployeeEdit(item)}>编辑</button><button className="text-action" disabled={saving} onClick={() => void toggleEmployee(item)}>{item.employmentStatus === 'ACTIVE' ? '停用' : '启用'}</button><button className="text-action danger" disabled={saving || item.employmentStatus === 'ACTIVE'} title={item.employmentStatus === 'ACTIVE' ? '请先停用后再删除' : '移入“已删除”，保留历史并可恢复'} onClick={() => void deleteEmployee(item)}>删除</button></span>}</span></div>)}</div>}
+        {employeeView === 'deleted' && <>
+          <div className="recycle-bin-note"><strong>已删除员工仍保留业务与审计历史。</strong><span>“恢复”后保持停用；“永久删除”将不可逆清除身份数据。</span></div>
+          <div className="simple-table maintenance-table deleted-employees-table"><div className="simple-head"><span>员工</span><span>原登录账号</span><span>最近组织</span><span>最近岗位</span><span>删除记录</span><span>操作</span></div>
+            {data.deletedEmployees.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.employeeNo}</small></span><span>{item.loginName || '未开通'}</span><span>{item.orgUnitName || '—'}</span><span>{item.positionName || '—'}</span><span><strong>{formatDateTime(item.deletedAt)}</strong><small>{item.deletedByName || '系统管理员'}</small></span><span className="maintenance-actions"><button className="text-action" disabled={saving} onClick={() => void restoreEmployee(item)}>恢复</button><button className="text-action danger" disabled={saving} onClick={() => void permanentlyDeleteEmployee(item)}>永久删除</button></span></div>)}
+            {data.deletedEmployees.length === 0 && <div className="empty-table-state"><strong>“已删除”中暂无员工</strong><span>删除的已停用员工会显示在这里。</span></div>}
+          </div>
+        </>}
+      </>}
     </article>}
 
     {modal === 'org' && <Modal title={editingId ? '编辑组织/门店' : '新建组织/门店'} onClose={closeModal} onSave={submit} saving={saving}><div className="form-grid"><label>组织类型<select disabled={Boolean(editingId)} value={orgForm.unitType} onChange={(event) => setOrgForm({ ...orgForm, unitType: event.target.value })}><option value="REGION">区域</option><option value="HOTEL">门店</option><option value="DEPARTMENT">部门</option><option value="GROUP">集团</option></select></label><label>上级组织<select disabled={Boolean(editingId)} value={orgForm.parentId} onChange={(event) => setOrgForm({ ...orgForm, parentId: event.target.value })}><option value="">无（仅集团）</option>{data.orgUnits.filter((item) => item.status === 'ACTIVE').map((item) => <option value={item.id} key={item.id}>{item.name} · {item.unitType}</option>)}</select></label><label>组织编码<input value={orgForm.code} onChange={(event) => setOrgForm({ ...orgForm, code: event.target.value })} /></label><label>组织名称<input value={orgForm.name} onChange={(event) => setOrgForm({ ...orgForm, name: event.target.value })} /></label><label>排序<input type="number" min="0" value={orgForm.sortOrder} onChange={(event) => setOrgForm({ ...orgForm, sortOrder: event.target.value })} /></label>{editingId && <label>状态<select disabled={orgForm.unitType === 'GROUP'} value={orgForm.status} onChange={(event) => setOrgForm({ ...orgForm, status: event.target.value })}><option value="ACTIVE">启用</option><option value="INACTIVE">停用</option></select></label>}{orgForm.unitType === 'HOTEL' && <><label>门店编码<input value={orgForm.propertyCode} onChange={(event) => setOrgForm({ ...orgForm, propertyCode: event.target.value })} /></label><label>城市<input value={orgForm.city} onChange={(event) => setOrgForm({ ...orgForm, city: event.target.value })} /></label><label>房间数<input type="number" min="0" value={orgForm.roomCount} onChange={(event) => setOrgForm({ ...orgForm, roomCount: event.target.value })} /></label><label>开业日期<input type="date" value={orgForm.openingDate} onChange={(event) => setOrgForm({ ...orgForm, openingDate: event.target.value })} /></label></>}</div>{editingId && <div className="inline-warning">为保护组织树与历史权限，编辑时不允许更改组织类型和上级组织。</div>}</Modal>}

@@ -72,6 +72,11 @@ public class OrganizationController {
         return service.listEmployees();
     }
 
+    @GetMapping("/employees/deleted")
+    public List<Map<String, Object>> deletedEmployees() {
+        return service.listDeletedEmployees();
+    }
+
     @PostMapping("/employees")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> createEmployee(@Valid @RequestBody OrganizationModels.CreateEmployee request) {
@@ -90,6 +95,22 @@ public class OrganizationController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteEmployee(@PathVariable UUID employeeId) {
         service.deleteEmployee(employeeId);
+    }
+
+    @PostMapping("/employees/actions/delete-inactive")
+    public Map<String, Object> deleteAllInactiveEmployees() {
+        return service.deleteAllInactiveEmployees();
+    }
+
+    @PostMapping("/employees/{employeeId}/restore")
+    public Map<String, Object> restoreEmployee(@PathVariable UUID employeeId) {
+        return service.restoreEmployee(employeeId);
+    }
+
+    @DeleteMapping("/employees/{employeeId}/permanent")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void permanentlyDeleteEmployee(@PathVariable UUID employeeId) {
+        service.permanentlyDeleteEmployee(employeeId);
     }
 
     @PostMapping("/employees/{employeeId}/assignments")

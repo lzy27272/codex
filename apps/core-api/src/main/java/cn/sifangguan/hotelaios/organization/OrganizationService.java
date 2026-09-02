@@ -331,8 +331,40 @@ public class OrganizationService {
                   on a.tenant_id = e.tenant_id and a.employee_id = e.id and a.status = 'ACTIVE'
                 left join org_unit o on o.tenant_id = a.tenant_id and o.id = a.org_unit_id
                 left join position_definition p on p.tenant_id = a.tenant_id and p.id = a.position_id
-                where e.tenant_id = :tenantId
+                where e.tenant_id = :tenantId and e.deleted_at is null
                 """ + visibility + " order by e.name, a.is_primary desc", parameters);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listDeletedEmployees() {
+        accessPolicy.requirePermission("org.manage");
+        TenantPrincipal principal = prepare();
+        requireTenantScope(principal, "员工回收站只能由集团级管理员查看");
+        return jdbc.queryForList("""
+                select e.id, e.account_id, u.login_name, e.employee_no, e.name, e.mobile,
+                       e.employment_status, e.hired_on, e.deleted_at,
+                       deleted_by.display_name as deleted_by_name,
+                       latest.org_unit_id, latest.org_unit_name,
+                       latest.position_id, latest.position_name
+                from employee e
+                left join user_account u
+                  on u.tenant_id = e.tenant_id and u.id = e.account_id
+                left join user_account deleted_by
+                  on deleted_by.tenant_id = e.tenant_id and deleted_by.id = e.deleted_by
+                left join lateral (
+                    select a.org_unit_id, o.name as org_unit_name,
+                           a.position_id, p.name as position_name
+                    from employee_position_assignment a
+                    join org_unit o on o.tenant_id = a.tenant_id and o.id = a.org_unit_id
+                    join position_definition p on p.tenant_id = a.tenant_id and p.id = a.position_id
+                    where a.tenant_id = e.tenant_id and a.employee_id = e.id
+                    order by a.updated_at desc, a.created_at desc, a.id
+                    limit 1
+                ) latest on true
+                where e.tenant_id = :tenantId
+                  and e.deleted_at is not null and e.permanently_deleted_at is null
+                order by e.deleted_at desc, e.id
+                """, base(principal));
     }
 
     @Transactional
@@ -489,27 +521,178 @@ public class OrganizationService {
         if (!"INACTIVE".equals(String.valueOf(current.get("employment_status")))) {
             throw new IllegalArgumentException("请先停用员工，再执行删除");
         }
-        Integer assignments = jdbc.queryForObject("""
-                select count(*) from employee_position_assignment
-                where tenant_id = :tenantId and employee_id = :id
-                """, base(principal).addValue("id", employeeId), Integer.class);
-        if (assignments != null && assignments > 0) {
-            throw new IllegalArgumentException("该员工已有任职或工作历史，只能停用，不能删除");
+        softDeleteEmployee(principal, current);
+    }
+
+    @Transactional
+    public Map<String, Object> deleteAllInactiveEmployees() {
+        accessPolicy.requirePermission("org.manage");
+        TenantPrincipal principal = prepare();
+        requireTenantScope(principal, "批量删除员工只能由集团级管理员执行");
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                select id, account_id, employee_no, name, employment_status
+                from employee
+                where tenant_id = :tenantId and employment_status = 'INACTIVE'
+                  and deleted_at is null
+                order by id
+                for update
+                """, base(principal));
+        for (Map<String, Object> row : rows) {
+            softDeleteEmployee(principal, row);
+        }
+        auditWriter.record("INACTIVE_EMPLOYEES_BULK_DELETED", "TENANT", principal.tenantId(),
+                "{\"status\":\"RECYCLE_BIN\",\"count\":" + rows.size() + "}");
+        return Map.of("deletedCount", rows.size());
+    }
+
+    @Transactional
+    public Map<String, Object> restoreEmployee(UUID employeeId) {
+        accessPolicy.requirePermission("org.manage");
+        TenantPrincipal principal = prepare();
+        requireTenantScope(principal, "员工恢复只能由集团级管理员执行");
+        Map<String, Object> current = requireDeletedEmployee(principal, employeeId);
+        if (current.get("permanently_deleted_at") != null) {
+            throw new IllegalArgumentException("该员工已永久删除，无法恢复");
+        }
+        int restored = jdbc.update("""
+                update employee
+                set deleted_at = null, deleted_by = null, updated_at = now()
+                where tenant_id = :tenantId and id = :id
+                  and deleted_at is not null and permanently_deleted_at is null
+                """, base(principal).addValue("id", employeeId));
+        if (restored != 1) {
+            throw new IllegalArgumentException("员工不在回收站或已被永久删除");
+        }
+        auditWriter.record("EMPLOYEE_RESTORED", "EMPLOYEE", employeeId,
+                "{\"status\":\"INACTIVE\"}");
+        return Map.of(
+                "id", employeeId,
+                "employeeNo", String.valueOf(current.get("employee_no")),
+                "name", String.valueOf(current.get("name")),
+                "employmentStatus", "INACTIVE"
+        );
+    }
+
+    @Transactional
+    public void permanentlyDeleteEmployee(UUID employeeId) {
+        accessPolicy.requirePermission("org.manage");
+        TenantPrincipal principal = prepare();
+        requireTenantScope(principal, "员工永久删除只能由集团级管理员执行");
+        Map<String, Object> current = requireDeletedEmployee(principal, employeeId);
+        if (current.get("permanently_deleted_at") != null) {
+            throw new IllegalArgumentException("该员工已永久删除");
         }
         UUID accountId = (UUID) current.get("account_id");
-        try {
-            MapSqlParameterSource parameters = base(principal).addValue("id", employeeId).addValue("accountId", accountId);
-            int deleted = jdbc.update("delete from employee where tenant_id = :tenantId and id = :id", parameters);
-            if (deleted != 1) {
-                throw new IllegalArgumentException("员工不存在或不属于当前租户");
-            }
-            if (accountId != null) {
-                jdbc.update("delete from user_account where tenant_id = :tenantId and id = :accountId", parameters);
-            }
-        } catch (DataIntegrityViolationException exception) {
-            throw new IllegalArgumentException("该员工账号已有权限、工作或审计数据，只能停用，不能删除", exception);
+        MapSqlParameterSource parameters = base(principal)
+                .addValue("id", employeeId)
+                .addValue("accountId", accountId)
+                .addValue("actorId", principal.actorId())
+                .addValue("employeeTombstone", "PURGED-" + employeeId)
+                .addValue("accountTombstone", accountId == null ? null : "purged-" + accountId);
+        jdbc.update("""
+                update employee
+                set employee_no = :employeeTombstone, name = '已永久删除员工', mobile = null,
+                    hired_on = null, employment_status = 'INACTIVE',
+                    permanently_deleted_at = now(), permanently_deleted_by = :actorId,
+                    updated_at = now()
+                where tenant_id = :tenantId and id = :id
+                  and deleted_at is not null and permanently_deleted_at is null
+                """, parameters);
+        if (accountId != null) {
+            jdbc.update("""
+                    update user_account
+                    set login_name = :accountTombstone, display_name = '已永久删除账号',
+                        mobile = null, status = 'INACTIVE', password_hash = null,
+                        password_changed_at = now(), failed_login_attempts = 0,
+                        locked_until = null, last_login_at = null, updated_at = now()
+                    where tenant_id = :tenantId and id = :accountId
+                    """, parameters);
+            jdbc.update("""
+                    update wecom_user_binding
+                    set wecom_user_id = 'purged-' || cast(id as text), status = 'REVOKED',
+                        user_id_fingerprint = encode(digest(
+                            corp_id || ':' || 'purged-' || cast(id as text), 'sha256'), 'hex'),
+                        preferred_assignment_id = null, last_verified_at = null,
+                        status_reason = 'ACCOUNT_PERMANENTLY_DELETED',
+                        assignment_snapshot_hash = null, assignment_selection_required = false,
+                        updated_by = :actorId, row_version = row_version + 1,
+                        updated_at = now()
+                    where tenant_id = :tenantId and account_id = :accountId
+                    """, parameters);
+            jdbc.update("""
+                    update wecom_user_binding_request
+                    set status = case
+                            when status in ('WAITING_SCAN','AUTHORIZING','PENDING_APPROVAL','CONFLICT')
+                            then 'CANCELLED' else status end,
+                        oauth_state_hash = null, browser_verifier_hash = null,
+                        provider_code_hash = null, candidate_wecom_user_id = null,
+                        candidate_fingerprint = null, conflicting_account_id = null,
+                        failure_code = 'ACCOUNT_PERMANENTLY_DELETED',
+                        decision_reason = '员工账号已永久删除', row_version = row_version + 1
+                    where tenant_id = :tenantId and account_id = :accountId
+                    """, parameters);
         }
-        auditWriter.record("EMPLOYEE_DELETED", "EMPLOYEE", employeeId, "{\"status\":\"DELETED\"}");
+        auditWriter.record("EMPLOYEE_PERMANENTLY_DELETED", "EMPLOYEE", employeeId,
+                "{\"status\":\"PURGED\",\"identityErased\":true}");
+    }
+
+    private void softDeleteEmployee(TenantPrincipal principal, Map<String, Object> current) {
+        UUID employeeId = (UUID) current.get("id");
+        UUID accountId = (UUID) current.get("account_id");
+        MapSqlParameterSource parameters = base(principal)
+                .addValue("id", employeeId)
+                .addValue("accountId", accountId)
+                .addValue("actorId", principal.actorId());
+        int deleted = jdbc.update("""
+                update employee
+                set employment_status = 'INACTIVE', deleted_at = now(), deleted_by = :actorId,
+                    updated_at = now()
+                where tenant_id = :tenantId and id = :id and deleted_at is null
+                """, parameters);
+        if (deleted != 1) {
+            throw new IllegalArgumentException("员工不存在、已删除或不属于当前租户");
+        }
+        jdbc.update("""
+                update employee_position_assignment
+                set status = 'INACTIVE', valid_to = case
+                    when valid_to is null or valid_to > greatest(valid_from, current_date)
+                    then greatest(valid_from, current_date) else valid_to end,
+                    updated_at = now()
+                where tenant_id = :tenantId and employee_id = :id and status = 'ACTIVE'
+                """, parameters);
+        if (accountId != null) {
+            jdbc.update("""
+                    update user_account
+                    set status = 'INACTIVE', updated_at = now()
+                    where tenant_id = :tenantId and id = :accountId
+                    """, parameters);
+            jdbc.update("""
+                    update role_assignment
+                    set valid_to = now()
+                    where tenant_id = :tenantId and account_id = :accountId
+                      and (valid_to is null or valid_to > now())
+                    """, parameters);
+            jdbc.update("""
+                    update wecom_user_binding
+                    set status = 'SUSPENDED', status_reason = 'ACCOUNT_OR_ASSIGNMENT_INACTIVE',
+                        assignment_selection_required = false, updated_by = :actorId,
+                        row_version = row_version + 1, updated_at = now()
+                    where tenant_id = :tenantId and account_id = :accountId
+                      and status <> 'REVOKED'
+                    """, parameters);
+            jdbc.update("""
+                    update wecom_user_binding_request
+                    set status = 'CANCELLED', oauth_state_hash = null,
+                        browser_verifier_hash = null, provider_code_hash = null,
+                        candidate_wecom_user_id = null, candidate_fingerprint = null,
+                        conflicting_account_id = null, failure_code = 'ACCOUNT_DELETED',
+                        decision_reason = '员工账号已移入回收站', row_version = row_version + 1
+                    where tenant_id = :tenantId and account_id = :accountId
+                      and status in ('WAITING_SCAN','AUTHORIZING','PENDING_APPROVAL','CONFLICT')
+                    """, parameters);
+        }
+        auditWriter.record("EMPLOYEE_SOFT_DELETED", "EMPLOYEE", employeeId,
+                "{\"status\":\"RECYCLE_BIN\"}");
     }
 
     @Transactional
@@ -589,11 +772,27 @@ public class OrganizationService {
 
     private Map<String, Object> requireEmployee(TenantPrincipal principal, UUID employeeId) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                select id, account_id, employee_no, name, employment_status
-                from employee where tenant_id = :tenantId and id = :id
+                select id, account_id, employee_no, name, employment_status,
+                       deleted_at, permanently_deleted_at
+                from employee
+                where tenant_id = :tenantId and id = :id and deleted_at is null
                 """, base(principal).addValue("id", employeeId));
         if (rows.isEmpty()) {
             throw new IllegalArgumentException("员工不存在或不属于当前租户");
+        }
+        return rows.getFirst();
+    }
+
+    private Map<String, Object> requireDeletedEmployee(TenantPrincipal principal, UUID employeeId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                select id, account_id, employee_no, name, employment_status,
+                       deleted_at, permanently_deleted_at
+                from employee
+                where tenant_id = :tenantId and id = :id and deleted_at is not null
+                for update
+                """, base(principal).addValue("id", employeeId));
+        if (rows.isEmpty()) {
+            throw new IllegalArgumentException("员工不在已删除列表或不属于当前租户");
         }
         return rows.getFirst();
     }
@@ -657,7 +856,8 @@ public class OrganizationService {
         }
         Integer count = jdbc.queryForObject(
                 "select count(*) from " + table + " where tenant_id = :tenantId and id = :id and "
-                        + statusColumn + " = 'ACTIVE'",
+                        + statusColumn + " = 'ACTIVE'"
+                        + ("employee".equals(table) ? " and deleted_at is null" : ""),
                 base(principal).addValue("id", id), Integer.class);
         if (count == null || count != 1) {
             throw new IllegalArgumentException(message);

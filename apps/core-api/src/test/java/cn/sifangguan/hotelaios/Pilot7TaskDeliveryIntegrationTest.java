@@ -139,20 +139,13 @@ class Pilot7TaskDeliveryIntegrationTest {
     }
 
     @Test
-    void otaAssistantTargetsAllHotelsButOnlyManagementPositionsAndCanDispatch() throws Exception {
-        UUID shanghaiManager = createAssignmentAt(
-                SHANGHAI_HOTEL, GENERAL_MANAGER_POSITION, "P7-SH-MANAGER");
-        JsonNode targets = json(getJson("/api/v1/tasks/targets", OTA_ASSISTANT));
+    void otaAssistantCannotListTargetsOrDispatchManagementTasks() throws Exception {
+        mockMvc.perform(get("/api/v1/tasks/targets")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Actor-Id", OTA_ASSISTANT))
+                .andExpect(status().isForbidden());
 
-        assertThat(containsAssignment(targets, GENERAL_MANAGER_ASSIGNMENT)).isTrue();
-        assertThat(containsAssignment(targets, shanghaiManager.toString())).isTrue();
-        assertThat(containsAssignment(targets, FRONT_DESK_ASSIGNMENT)).isFalse();
-        for (JsonNode target : targets) {
-            assertThat(target.path("level_code").asText()).startsWith("M");
-            assertThat(target.path("hotel_id").asText()).isNotBlank();
-        }
-
-        MvcResult created = postTask(OTA_ASSISTANT, """
+        postTaskExpecting(OTA_ASSISTANT, """
                 {
                   "orgUnitId":"%s",
                   "assigneeAssignmentId":"%s",
@@ -162,10 +155,7 @@ class Pilot7TaskDeliveryIntegrationTest {
                   "dispatchNow":true
                 }
                 """.formatted(HANGZHOU_HOTEL, GENERAL_MANAGER_ASSIGNMENT,
-                STANDARD_VERSION, OTA_ASSISTANT_ASSIGNMENT));
-        String taskId = json(created).path("id").asText();
-        assertThat(json(created).path("lifecycle_status").asText()).isEqualTo("PENDING_ACK");
-        assertThat(containsId(json(getJson("/api/v1/tasks?view=mine", GENERAL_MANAGER)), taskId)).isTrue();
+                STANDARD_VERSION, OTA_ASSISTANT_ASSIGNMENT), 403);
     }
 
     @Test
@@ -247,15 +237,15 @@ class Pilot7TaskDeliveryIntegrationTest {
     }
 
     @Test
-    void departmentSupervisorCanReadContainingHotelDashboardAndOnlyThatHotelInOperations() throws Exception {
-        JsonNode dashboard = json(getJson(
-                "/api/v1/dashboards/hotels/" + HANGZHOU_HOTEL, FRONT_OFFICE_SUPERVISOR));
-        assertThat(dashboard.path("hotel").path("id").asText()).isEqualTo(HANGZHOU_HOTEL);
-
-        JsonNode operations = json(getJson("/api/v1/dashboards/operations", FRONT_OFFICE_SUPERVISOR));
-        assertThat(operations.path("hotelCount").asInt()).isEqualTo(1);
-        assertThat(operations.path("hotels")).hasSize(1);
-        assertThat(operations.path("hotels").get(0).path("id").asText()).isEqualTo(HANGZHOU_HOTEL);
+    void departmentSupervisorCannotReadHotelOrRegionalDashboards() throws Exception {
+        mockMvc.perform(get("/api/v1/dashboards/hotels/{hotelId}", HANGZHOU_HOTEL)
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Actor-Id", FRONT_OFFICE_SUPERVISOR))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/dashboards/operations")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Actor-Id", FRONT_OFFICE_SUPERVISOR))
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -276,8 +266,10 @@ class Pilot7TaskDeliveryIntegrationTest {
         UUID shanghaiReviewer = createAssignmentAt(
                 SHANGHAI_HOTEL, GENERAL_MANAGER_POSITION, "P7-READ-SH-REVIEWER");
 
-        JsonNode targets = json(getJson("/api/v1/tasks/targets", scopedOta.accountId().toString()));
-        assertThat(containsAssignment(targets, shanghaiAssignee.toString())).isTrue();
+        mockMvc.perform(get("/api/v1/tasks/targets")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Actor-Id", scopedOta.accountId()))
+                .andExpect(status().isForbidden());
 
         String unrelatedTaskId = json(postTask(CEO, """
                 {
@@ -290,8 +282,10 @@ class Pilot7TaskDeliveryIntegrationTest {
                 """.formatted(SHANGHAI_HOTEL, shanghaiAssignee, shanghaiReviewer, STANDARD_VERSION)))
                 .path("id").asText();
 
-        assertThat(containsId(json(getJson(
-                "/api/v1/tasks?view=team", scopedOta.accountId().toString())), unrelatedTaskId)).isFalse();
+        mockMvc.perform(get("/api/v1/tasks?view=team")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Actor-Id", scopedOta.accountId()))
+                .andExpect(status().isForbidden());
         assertThat(containsId(json(getJson(
                 "/api/v1/tasks?view=all", scopedOta.accountId().toString())), unrelatedTaskId)).isFalse();
         mockMvc.perform(get("/api/v1/tasks/{taskId}", unrelatedTaskId)

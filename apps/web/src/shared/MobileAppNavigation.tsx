@@ -8,56 +8,63 @@ export type FunctionNavigationItem = {
   group?: string
 }
 
-type MobileTab = 'workbench' | 'tasks' | 'daily-reports-my' | 'notifications' | 'all-functions'
+export type MobileNavigationIcon = 'workbench' | 'tasks' | 'reports' | 'notifications' | 'profile'
 
-const tabItems: ReadonlyArray<{ id: MobileTab; label: string }> = [
-  { id: 'workbench', label: '工作台' },
-  { id: 'tasks', label: '待办' },
-  { id: 'daily-reports-my', label: '日报' },
-  { id: 'notifications', label: '消息' },
-  { id: 'all-functions', label: '我的' },
-]
-
-function TabIcon({ id }: { id: MobileTab }) {
-  const common = { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true } as const
-  if (id === 'workbench') return <svg {...common}><path d="M3.5 10.2 12 3.5l8.5 6.7v9.3a1 1 0 0 1-1 1h-5v-6h-5v6h-5a1 1 0 0 1-1-1z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /></svg>
-  if (id === 'tasks') return <svg {...common}><rect x="5" y="4.5" width="14" height="16" rx="2" stroke="currentColor" strokeWidth="1.8" /><path d="M9 4.5v-1h6v1M8.5 10.5l1.5 1.5 3-3M8.5 16h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-  if (id === 'daily-reports-my') return <svg {...common}><path d="M6 3.5h9l3 3v14H6z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /><path d="M15 3.5v3h3M9 11h6M9 15h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
-  if (id === 'notifications') return <svg {...common}><path d="M5 10a7 7 0 0 1 14 0v4l1.5 2.5h-17L5 14zM9.5 20h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-  return <svg {...common}><circle cx="12" cy="8" r="3.5" stroke="currentColor" strokeWidth="1.8" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+export type MobileNavigationItem = {
+  key: string
+  label: string
+  target: AppRouteId
+  matchSections: readonly AppSectionId[]
+  icon: MobileNavigationIcon
+  badge?: 'unread'
+  disabled?: boolean
 }
 
-function currentTab(sectionId: AppSectionId): MobileTab {
-  if (sectionId === 'notifications') return 'notifications'
-  if (sectionId === 'daily-reports' || sectionId === 'daily-report-templates') return 'daily-reports-my'
-  if (sectionId === 'tasks' || sectionId === 'my-work' || sectionId === 'team-work') return 'tasks'
-  if (sectionId === 'all-functions') return 'all-functions'
-  return 'workbench'
+export type MobileNavigationItems = readonly [
+  MobileNavigationItem,
+  MobileNavigationItem,
+  MobileNavigationItem,
+  MobileNavigationItem,
+  MobileNavigationItem,
+]
+
+function TabIcon({ icon }: { icon: MobileNavigationIcon }) {
+  const common = { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true } as const
+  if (icon === 'workbench') return <svg {...common}><path d="M3.5 10.2 12 3.5l8.5 6.7v9.3a1 1 0 0 1-1 1h-5v-6h-5v6h-5a1 1 0 0 1-1-1z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /></svg>
+  if (icon === 'tasks') return <svg {...common}><rect x="5" y="4.5" width="14" height="16" rx="2" stroke="currentColor" strokeWidth="1.8" /><path d="M9 4.5v-1h6v1M8.5 10.5l1.5 1.5 3-3M8.5 16h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+  if (icon === 'reports') return <svg {...common}><path d="M6 3.5h9l3 3v14H6z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /><path d="M15 3.5v3h3M9 11h6M9 15h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+  if (icon === 'notifications') return <svg {...common}><path d="M5 10a7 7 0 0 1 14 0v4l1.5 2.5h-17L5 14zM9.5 20h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+  return <svg {...common}><circle cx="12" cy="8" r="3.5" stroke="currentColor" strokeWidth="1.8" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
 }
 
 export function MobileBottomNavigation({
   sectionId,
   go,
-  resolveTarget,
+  items,
   unreadCount,
 }: {
   sectionId: AppSectionId
   go: AppNavigate
-  resolveTarget: (id: MobileTab) => AppRouteId
+  items: MobileNavigationItems
   unreadCount: number
 }) {
-  const active = currentTab(sectionId)
   return <nav className="mobile-bottom-nav" aria-label="手机端主导航">
-    {tabItems.map((item) => <button
-      type="button"
-      key={item.id}
-      className={active === item.id ? 'active' : ''}
-      onClick={() => go(resolveTarget(item.id))}
-      aria-current={active === item.id ? 'page' : undefined}
-    >
-      <span className="mobile-tab-icon"><TabIcon id={item.id} />{item.id === 'notifications' && unreadCount > 0 && <b>{unreadCount > 99 ? '99+' : unreadCount}</b>}</span>
-      <span>{item.label}</span>
-    </button>)}
+    {items.map((item) => {
+      const active = item.matchSections.includes(sectionId)
+      const itemUnreadCount = item.badge === 'unread' ? unreadCount : 0
+      return <button
+        type="button"
+        key={item.key}
+        className={active ? 'active' : ''}
+        disabled={item.disabled}
+        onClick={() => go(item.target)}
+        aria-current={active ? 'page' : undefined}
+        aria-label={itemUnreadCount > 0 ? `${item.label}，${itemUnreadCount}条未读` : item.label}
+      >
+        <span className="mobile-tab-icon"><TabIcon icon={item.icon} />{itemUnreadCount > 0 && <b>{itemUnreadCount > 99 ? '99+' : itemUnreadCount}</b>}</span>
+        <span>{item.label}</span>
+      </button>
+    })}
   </nav>
 }
 

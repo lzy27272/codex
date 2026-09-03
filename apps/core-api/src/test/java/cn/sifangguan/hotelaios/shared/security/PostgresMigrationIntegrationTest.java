@@ -54,7 +54,7 @@ class PostgresMigrationIntegrationTest {
                     .migrate()
                     .migrationsExecuted;
 
-            assertEquals(34, migrations);
+            assertEquals(35, migrations);
 
             try (Connection owner = ownerDataSource.getConnection();
                  Statement statement = owner.createStatement()) {
@@ -159,6 +159,23 @@ class PostgresMigrationIntegrationTest {
                         SELECT count(*) FROM permission
                         WHERE code = 'org.read' AND delegable_to_position = true
                         """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM permission
+                        WHERE code = 'dashboard.operations'
+                          AND delegable_to_position = true
+                          AND function_category = 'DASHBOARD'
+                        """));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT count(*) FROM role_permission grant_item
+                        JOIN app_role role
+                          ON role.tenant_id = grant_item.tenant_id
+                         AND role.id = grant_item.role_id
+                        JOIN permission permission_item
+                          ON permission_item.id = grant_item.permission_id
+                        WHERE grant_item.tenant_id = '%s'::uuid
+                          AND role.code = 'OTA_OPERATION_MANAGER'
+                          AND permission_item.code = 'dashboard.operations'
+                        """.formatted(DEMO_TENANT)));
                 assertEquals(0, scalarInt(statement, """
                         SELECT count(*)
                         FROM position_definition position

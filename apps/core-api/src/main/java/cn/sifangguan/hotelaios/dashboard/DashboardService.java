@@ -124,7 +124,7 @@ public class DashboardService {
 
     @Transactional(readOnly = true)
     public Map<String, Object> operationsDashboard() {
-        accessPolicy.requirePermission("dashboard.hotel");
+        accessPolicy.requirePermission("dashboard.operations");
         TenantPrincipal principal = prepare();
         if (!principal.hasTenantScope() && principal.orgScopes().isEmpty()) {
             return Map.of("hotels", List.of());

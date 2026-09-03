@@ -57,7 +57,17 @@ import {
   requiredPermissionsForRoute,
   type AppNavigate,
   type AppRouteId,
+  type AppSectionId,
 } from './app/routeConfig'
+import {
+  applyRoleDefaultsForFallback,
+  isRouteAllowedByRoleDefaults,
+  resolveDailyReportsTarget,
+  resolveFullAccountPresentationRole,
+  resolveRolePresentationPolicy,
+  shouldUseRoleDefaultsFallback,
+  type MobilePresentationTab,
+} from './app/rolePresentationPolicy'
 import { resolveNotificationNavigation } from './app/notificationNavigation'
 import { useHashRoute } from './app/useHashRoute'
 import { PageAccessBoundary } from './shared/PageAccessBoundary'
@@ -68,7 +78,12 @@ import { WecomUserBindingAdministration } from './features/wecom/WecomUserBindin
 import { consumeWecomBindingEntry } from './features/wecom/bindingEntryRoute'
 import { WecomBindingEnrollmentEntry } from './features/wecom/WecomBindingEnrollmentEntry'
 import { WecomDirectoryOnboardingAdministration } from './features/wecom/WecomDirectoryOnboardingAdministration'
-import { AllFunctionsPage, MobileBottomNavigation } from './shared/MobileAppNavigation'
+import {
+  AllFunctionsPage,
+  MobileBottomNavigation,
+  type MobileNavigationIcon,
+  type MobileNavigationItems,
+} from './shared/MobileAppNavigation'
 
 const icpRecordNumber = (import.meta.env.VITE_ICP_RECORD_NUMBER ?? '').trim()
 
@@ -80,11 +95,11 @@ const InvestmentFeature = lazy(() => import('./features/investments/InvestmentRo
 const initialWecomTaskEntry = consumeWecomTaskEntry()
 const initialWecomBindingEntry = consumeWecomBindingEntry()
 
-const navigation: Array<{ id: AppRouteId; sectionId?: string; label: string; icon: string; group?: string; permissions?: string[]; roles?: string[] }> = [
+const navigation: Array<{ id: AppRouteId; sectionId?: string; label: string; icon: string; group?: string; permissions?: string[] }> = [
   { id: 'workbench', label: '角色工作台', icon: '⌂' },
   { id: 'hotel-dashboard', label: '门店驾驶舱', icon: '▤', group: '管理驾驶舱', permissions: ['dashboard.hotel'] },
-  { id: 'operations-dashboard', label: '区域多门店', icon: '▥', group: '管理驾驶舱', permissions: ['dashboard.hotel'], roles: ['OTA_OPERATION_MANAGER'] },
-  { id: 'investments', label: '投资测算', icon: '¥', group: '投资决策', permissions: [permissionCodes.investment.read], roles: ['CEO', 'PLATFORM_ADMIN'] },
+  { id: 'operations-dashboard', label: '区域多门店', icon: '▥', group: '管理驾驶舱', permissions: ['dashboard.operations'] },
+  { id: 'investments', label: '投资测算', icon: '¥', group: '投资决策', permissions: [permissionCodes.investment.read] },
   { id: 'work-packages', label: '工作包中心', icon: '▦', group: '标准与工作', permissions: ['work-package.read', 'work-package.manage', 'standard.read'] },
   { id: 'my-work', label: '我的工作', icon: '✓', permissions: ['work-record.read', 'work-record.submit', 'work.submit'] },
   { id: 'team-work', label: '团队工作', icon: '◎', permissions: ['work-record.review', 'work-record.read-team'] },
@@ -102,6 +117,26 @@ const navigation: Array<{ id: AppRouteId; sectionId?: string; label: string; ico
   { id: 'wecom-onboarding', label: '企业微信入职审核', icon: '人', group: '系统配置', permissions: [permissionCodes.wecomBinding.read] },
   { id: 'wecom-bindings', label: '企微绑定与异常', icon: '◎', permissions: [permissionCodes.wecomBinding.read] },
 ]
+
+function sectionsForMobileTab(tab: Pick<MobilePresentationTab, 'slot'> & { target: AppRouteId }): readonly AppSectionId[] {
+  if (tab.slot === 'secondary' && tab.target === 'tasks') return ['tasks', 'my-work']
+  if (tab.slot === 'profile') return ['all-functions']
+  if (tab.target === 'daily-reports-my' || tab.target === 'daily-reports-team') return ['daily-reports']
+  if (tab.target === 'daily-operations') return ['daily-operations']
+  if (tab.target === 'kpi-center') return ['kpi']
+  if (tab.target === 'investments') return ['investments']
+  if (tab.target === 'organization') return ['organization', 'wecom-bindings', 'wecom-onboarding', 'wecom-webhooks']
+  return [tab.target as AppSectionId]
+}
+
+function iconForMobileTab(tab: MobilePresentationTab): MobileNavigationIcon {
+  if (tab.slot === 'secondary' && tab.target === 'tasks') return 'tasks'
+  if (tab.slot === 'secondary') return 'reports'
+  if (tab.slot === 'domain') return 'reports'
+  if (tab.slot === 'notifications') return 'notifications'
+  if (tab.slot === 'profile') return 'profile'
+  return 'workbench'
+}
 
 const roleStorageKey = 'hotel-ai-os-role:v1'
 const statusText: Record<string, string> = {
@@ -180,7 +215,7 @@ function Workbench({ identity, permissions, go }: { identity: RoleContext; permi
 
   return <>
     <section className="hero">
-      <div><span className="eyebrow">SPRINT 2 · MANAGEMENT LOOP</span><h1>{identity.label}工作台</h1><p>{identity.focus}</p></div>
+      <div><span className="eyebrow">当前岗位工作</span><h1>{identity.label}工作台</h1><p>{identity.focus}</p></div>
       <div className="hero-context"><span>当前有效任职</span><strong>{identity.label}</strong><small>{identity.orgName}</small><SourceFlag source={source} /></div>
     </section>
     {loading ? <DataState loading onRetry={() => void Promise.all([myWork.reload(), tasks.reload(), reviewTaskResource.reload(), notices.reload()])} /> : <>
@@ -191,13 +226,13 @@ function Workbench({ identity, permissions, go }: { identity: RoleContext; permi
         <Metric label="未读通知" value={unread.length} hint="任务、逾期与升级提醒" tone="violet" onClick={() => go('notifications', { unread: 'true' })} />
       </section>
       <section className="dashboard-grid">
-        <article className="panel span-2"><header><div><span className="panel-kicker">{hasAssignment ? "TODAY'S WORK" : 'MANAGEMENT SCOPE'}</span><h2>{hasAssignment ? '今日岗位工作' : '集团管理视图'}</h2></div><button className="link-button" onClick={() => go(hasAssignment ? 'my-work' : 'team-work')}>{hasAssignment ? '查看全部' : '查看团队执行'}</button></header>
+        <article className="panel span-2"><header><div><span className="panel-kicker">{hasAssignment ? '今日工作' : '管理范围'}</span><h2>{hasAssignment ? '今日岗位工作' : '集团管理视图'}</h2></div><button className="link-button" onClick={() => go(hasAssignment ? 'my-work' : 'team-work')}>{hasAssignment ? '查看全部' : '查看团队执行'}</button></header>
           {hasAssignment ? <div className="compact-list">{scopedWork.slice(0, 5).map((item) => <div key={item.id}><i className={`work-dot ${item.status.toLowerCase()}`} /><span><strong>{item.title}</strong><small>{item.targetOrgName} · {item.packageName}</small></span><span className="compact-meta"><Status value={item.status} /><small>{formatDate(item.dueAt)}</small></span></div>)}</div> : <div className="state-card"><b>◎</b><strong>当前为集团管理账号</strong><span>CEO 等无岗位任职的账号通过团队工作、任务中心和驾驶舱管理，不生成虚假的个人工作。</span></div>}
         </article>
-        <article className="panel"><header><div><span className="panel-kicker">NOTIFICATIONS</span><h2>管理提醒</h2></div><button className="link-button" onClick={() => go('notifications')}>通知中心</button></header>
+        <article className="panel"><header><div><span className="panel-kicker">消息提醒</span><h2>管理提醒</h2></div><button className="link-button" onClick={() => go('notifications')}>通知中心</button></header>
           <div className="notice-list">{scopedNotices.slice(0, 4).map((item) => <div className={item.readAt ? 'read' : ''} key={item.id}><i /><span><strong>{item.title}</strong><small>{item.content}</small></span></div>)}</div>
         </article>
-        <article className="panel span-3"><header><div><span className="panel-kicker">EXECUTION LOOP</span><h2>执行任务</h2></div><button className="link-button" onClick={() => go('tasks', { view: primaryTaskView })}>进入任务中心</button></header>
+        <article className="panel span-3"><header><div><span className="panel-kicker">任务执行</span><h2>执行任务</h2></div><button className="link-button" onClick={() => go('tasks', { view: primaryTaskView })}>进入任务中心</button></header>
           <TaskRows tasks={scopedTasks.slice(0, 5)} onSelect={(task) => go('tasks', { view: primaryTaskView, taskId: task.id })} />
         </article>
       </section>
@@ -764,11 +799,30 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
   const selectedAssignment = compatibleAssignments.find((item) => item.id === selectedAssignmentId)
     ?? compatibleAssignments.find((item) => item.primary)
     ?? compatibleAssignments[0]
-  const isPlatformAdmin = me.data.roleCodes.includes('PLATFORM_ADMIN')
-  const isFullAccountLevel = isPlatformAdmin || me.data.roleCodes.includes('CEO')
-  const accountRoleContext = roleContexts.find((role) => role.roleCode === me.data.primaryRoleCode)
+  const fullAccountRoleCode = resolveFullAccountPresentationRole(me.data.roleCodes)
+  const platformRoleCode = fullAccountRoleCode === 'PLATFORM_ADMIN' ? fullAccountRoleCode : undefined
+  const ceoRoleCode = fullAccountRoleCode === 'CEO' ? fullAccountRoleCode : undefined
+  const isPlatformAdmin = Boolean(platformRoleCode)
+  const isCeo = Boolean(ceoRoleCode)
+  const isFullAccountLevel = isPlatformAdmin || isCeo
+  const accountPresentationRoleCode = platformRoleCode ?? ceoRoleCode ?? me.data.primaryRoleCode
+  const accountPresentationFamily = resolveRolePresentationPolicy(accountPresentationRoleCode).key
+  const accountRoleContext = roleContexts.find((role) => role.roleCode === accountPresentationRoleCode)
+    ?? roleContexts.find((role) => resolveRolePresentationPolicy(role.roleCode).key === accountPresentationFamily)
+  const selectedPresentationFamily = resolveRolePresentationPolicy(selectedAssignment?.positionCode).key
   const selectedRoleContext = isFullAccountLevel ? undefined : roleContexts.find((role) => role.roleCode === selectedAssignment?.positionCode)
-  const resolvedRoleContext = isFullAccountLevel ? accountRoleContext : selectedRoleContext ?? accountRoleContext
+    ?? roleContexts.find((role) => resolveRolePresentationPolicy(role.roleCode).key === selectedPresentationFamily)
+  const resolvedRoleContext = isFullAccountLevel ? accountRoleContext : selectedRoleContext
+  const presentationRoleCode = useMemo(() => {
+    if (isFullAccountLevel) return accountPresentationRoleCode
+    const assignmentRoleCode = selectedAssignment?.positionCode ?? me.data.primaryRoleCode ?? identity.roleCode
+    if (resolveRolePresentationPolicy(assignmentRoleCode).knownRole) return assignmentRoleCode
+    return me.data.roleCodes.includes('HR_KPI_ADMIN') ? 'HR_KPI_ADMIN' : assignmentRoleCode
+  }, [accountPresentationRoleCode, identity.roleCode, isFullAccountLevel, me.data.primaryRoleCode, me.data.roleCodes, selectedAssignment?.positionCode])
+  const presentationPolicy = useMemo(
+    () => resolveRolePresentationPolicy(presentationRoleCode),
+    [presentationRoleCode],
+  )
   const activeIdentity: RoleContext = useMemo(() => ({
     ...(resolvedRoleContext ?? identity),
     key: `${resolvedRoleContext?.key ?? identity.key}:${isFullAccountLevel ? 'account' : selectedAssignment?.id ?? 'account'}`,
@@ -776,22 +830,22 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     userName: me.data.displayName || identity.userName,
     employeeId: me.data.employeeId,
     assignmentOrgUnitId: isFullAccountLevel ? undefined : selectedAssignment?.orgUnitId,
-    roleCode: isFullAccountLevel ? me.data.primaryRoleCode : selectedRoleContext?.roleCode ?? (me.data.primaryRoleCode || identity.roleCode),
+    roleCode: isFullAccountLevel ? accountPresentationRoleCode : selectedAssignment?.positionCode ?? (me.data.primaryRoleCode || identity.roleCode),
     orgScopes: authMode === 'dev-header' && !me.data.orgScopes.length ? identity.orgScopes : me.data.orgScopes,
     assignmentId: isFullAccountLevel ? undefined : selectedAssignment?.id ?? (authMode === 'dev-header' ? identity.assignmentId : undefined),
     label: isFullAccountLevel ? resolvedRoleContext?.label ?? identity.label : selectedAssignment?.positionName ?? resolvedRoleContext?.label ?? identity.label,
     orgName: isFullAccountLevel ? resolvedRoleContext?.orgName ?? identity.orgName : selectedAssignment?.orgName ?? resolvedRoleContext?.orgName ?? identity.orgName,
-    focus: resolvedRoleContext?.focus ?? identity.focus,
-  }), [identity, isFullAccountLevel, me.data, resolvedRoleContext, selectedAssignment, selectedRoleContext])
+    focus: resolvedRoleContext?.focus ?? presentationPolicy.focus,
+  }), [identity, isFullAccountLevel, accountPresentationRoleCode, me.data, presentationPolicy.focus, resolvedRoleContext, selectedAssignment])
   const activePermissions = useMemo(() => {
     if (isFullAccountLevel) return me.data.permissions
     return selectedAssignment?.permissionCodes !== undefined ? selectedAssignment.permissionCodes : me.data.permissions
   }, [isFullAccountLevel, me.data.permissions, selectedAssignment?.permissionCodes])
-  useEffect(() => {
-    if (!me.loading && !me.error && isPlatformAdmin && !route.explicit && view === 'workbench') {
-      navigate('kpi-center')
-    }
-  }, [isPlatformAdmin, me.loading, me.error, route.explicit, view, navigate])
+  const useRoleDefaultsFallback = shouldUseRoleDefaultsFallback({
+    identitySource: me.source,
+    fullAccountLevel: isFullAccountLevel,
+    assignmentPermissionsPresent: selectedAssignment?.permissionCodes !== undefined,
+  })
   const secondaryIdentityReady = canLoadSecondaryResources(authMode, me.loading, me.error)
   const unreadResource = useResource<NotificationItem[]>(
     `${activeIdentity.key}:sidebar-notices:${secondaryIdentityReady ? 'ready' : 'pending'}`,
@@ -803,20 +857,41 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
   )
   const unreadCount = unreadResource.data.filter((item) => !item.readAt).length
   const pilotDemoMode = demoFallbackEnabled && me.source === 'demo'
-  const visibleNavigation = navigation.filter((item) => {
+  const permissionVisibleNavigation = useMemo(() => navigation.filter((item) => {
     if (item.id === 'my-work' && !activeIdentity.assignmentId) return false
-    if (item.roles?.length && !item.roles.includes(activeIdentity.roleCode)) return false
     return !item.permissions?.length ||
       (demoFallbackEnabled && me.source === 'demo' && !isDailyFeatureRoute(item.id) && !isInvestmentFeatureRoute(item.id)) ||
       activePermissions.includes('*') ||
       item.permissions.some((permission) => activePermissions.includes(permission))
-  })
+  }), [activeIdentity.assignmentId, activePermissions, me.source])
+  const visibleNavigation = useMemo(
+    () => useRoleDefaultsFallback
+      ? applyRoleDefaultsForFallback(permissionVisibleNavigation, presentationRoleCode)
+      : permissionVisibleNavigation,
+    [permissionVisibleNavigation, presentationRoleCode, useRoleDefaultsFallback],
+  )
   const navigationTarget = (id: AppRouteId): AppRouteId => {
     if (id !== 'daily-reports-my') return id
+    const canUseTeamReport = activePermissions.includes('*')
+      || activePermissions.includes(permissionCodes.dailyReport.readTeam)
+      || activePermissions.includes(permissionCodes.dailyReport.reviewException)
+      || activePermissions.includes(permissionCodes.dailyReport.reviewCorrection)
     const canUseOwnReport = Boolean(activeIdentity.assignmentId) &&
       (activePermissions.includes('*') || activePermissions.includes(permissionCodes.dailyReport.readOwn) || activePermissions.includes(permissionCodes.dailyReport.submit))
-    return canUseOwnReport ? 'daily-reports-my' : 'daily-reports-team'
+    return resolveDailyReportsTarget({
+      roleCode: presentationRoleCode,
+      hasAssignment: Boolean(activeIdentity.assignmentId),
+      canUseOwnReport,
+      canUseTeamReport,
+    })
   }
+  useEffect(() => {
+    if (me.loading || me.error || route.explicit || view !== 'workbench') return
+    const target = presentationPolicy.mobileTabs[0]?.target ?? 'workbench'
+    if (target !== 'workbench' && visibleNavigation.some((item) => item.id === target)) navigate(navigationTarget(target))
+  }, [me.error, me.loading, navigate, presentationPolicy, route.explicit, view, visibleNavigation])
+  const routePresentationAllowed = !useRoleDefaultsFallback
+    || isRouteAllowedByRoleDefaults(presentationRoleCode, view, true)
   const page = useMemo(() => {
     if (authMode === 'bearer' && (me.loading || me.error)) {
       return <section className="page-section"><div className="empty-state"><strong>{me.error ? '身份与权限读取失败' : '正在读取身份与权限'}</strong><span>{me.error ?? '系统将在权限解析完成后加载业务页面，避免使用错误的岗位或组织范围。'}</span></div></section>
@@ -826,6 +901,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
         permissions={activePermissions}
         requiredAny={requiredPermissionsForRoute(view)}
         requiredAll={requiredAllPermissionsForRoute(view, routeParams)}
+        allowed={routePresentationAllowed}
       >
         <Suspense fallback={<div className="state-card"><div className="spinner" /><strong>正在加载投资测算模块</strong></div>}>
           <InvestmentFeature view={view} params={routeParams} identity={activeIdentity} grantedPermissions={activePermissions} go={navigate} />
@@ -844,6 +920,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
         permissions={activePermissions}
         requiredAny={requiredPermissionsForRoute(view)}
         requiredAll={requiredAllPermissionsForRoute(view, routeParams)}
+        allowed={routePresentationAllowed}
       >
         <Suspense fallback={<div className="state-card"><div className="spinner" /><strong>正在加载业务模块</strong></div>}>{feature}</Suspense>
       </PageAccessBoundary>
@@ -883,8 +960,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       />; break
     }
     const routeAccess = navigation.find((item) => item.id === view)
-    const contextAllowed = (view !== 'my-work' || Boolean(activeIdentity.assignmentId)) &&
-      (!routeAccess?.roles?.length || routeAccess.roles.includes(activeIdentity.roleCode))
+    const contextAllowed = (view !== 'my-work' || Boolean(activeIdentity.assignmentId)) && routePresentationAllowed
     const boundaryPermissions = demoFallbackEnabled && me.source === 'demo' ? ['*'] : activePermissions
     return <PageAccessBoundary
       permissions={boundaryPermissions}
@@ -893,7 +969,32 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     >
       {legacyPage}
     </PageAccessBoundary>
-  }, [view, routeParams, activeIdentity, activePermissions, me.error, me.loading])
+  }, [view, routeParams, activeIdentity, activePermissions, me.error, me.loading, presentationRoleCode, routePresentationAllowed, visibleNavigation])
+  const mobileNavigationItems = useMemo(() => {
+    const visibleIds = new Set(visibleNavigation.map((item) => item.id))
+    const resolveMobileTarget = (tab: MobilePresentationTab): AppRouteId | undefined => {
+      if (tab.target === 'all-functions' || tab.target === 'workbench') return tab.target
+      if (tab.target === 'daily-reports-my' && visibleIds.has('daily-reports-my')) return navigationTarget(tab.target)
+      if (visibleIds.has(tab.target)) return navigationTarget(tab.target)
+      if (tab.slot === 'secondary' && tab.target === 'tasks') {
+        return visibleNavigation.find((item) => ['tasks', 'my-work', 'team-work'].includes(item.id))?.id
+      }
+      return undefined
+    }
+    return presentationPolicy.mobileTabs.map((tab) => {
+      const resolvedTarget = resolveMobileTarget(tab)
+      const target = resolvedTarget ?? 'workbench'
+      return {
+        key: tab.slot,
+        label: tab.label,
+        target,
+        matchSections: resolvedTarget ? sectionsForMobileTab({ ...tab, target }) : [],
+        icon: iconForMobileTab(tab),
+        ...(!resolvedTarget ? { disabled: true } : {}),
+        ...(tab.slot === 'notifications' ? { badge: 'unread' as const } : {}),
+      }
+    }) as unknown as MobileNavigationItems
+  }, [activeIdentity.assignmentId, activePermissions, presentationPolicy, visibleNavigation])
   const changeRole = (key: string) => {
     const next = roleContexts.find((role) => role.key === key)
     if (!next) return
@@ -921,21 +1022,8 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       <MobileBottomNavigation
         sectionId={sectionId}
         go={navigate}
+        items={mobileNavigationItems}
         unreadCount={unreadCount}
-        resolveTarget={(id) => {
-          if (id === 'all-functions') return id
-          if (id === 'tasks') {
-            const preferred = visibleNavigation.find((item) => item.id === 'tasks')
-              ?? visibleNavigation.find((item) => item.id === 'my-work')
-              ?? visibleNavigation.find((item) => item.id === 'team-work')
-            return preferred?.id ?? 'all-functions'
-          }
-          if (id === 'daily-reports-my') {
-            return visibleNavigation.some((item) => item.id === 'daily-reports-my') ? navigationTarget(id) : 'all-functions'
-          }
-          if (id === 'notifications') return visibleNavigation.some((item) => item.id === id) ? id : 'all-functions'
-          return id
-        }}
       />
       {changingPassword && <ChangePasswordDialog identity={activeIdentity} onClose={() => setChangingPassword(false)} onChanged={() => { setChangingPassword(false); onLogout?.() }} />}
     </main>

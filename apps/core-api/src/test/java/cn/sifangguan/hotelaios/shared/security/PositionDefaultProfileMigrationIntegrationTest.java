@@ -24,6 +24,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
     private static final String DEMO_CEO = "19000000-0000-0000-0000-000000000001";
     private static final String V35_RESOURCE =
             "db/migration/V35__publish_untouched_position_default_profiles.sql";
+    private static final String MIGRATION_OWNER = "position_migration_owner";
 
     private static final Set<String> GENERAL_MANAGER_PERMISSIONS = Set.of(
             "org.read",
@@ -90,7 +91,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
 
             prepareCustomPublishedAndHotelOverrideCases(dataSource);
 
-            assertEquals(1, Flyway.configure()
+            assertEquals(2, Flyway.configure()
                     .dataSource(dataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
@@ -111,6 +112,108 @@ class PositionDefaultProfileMigrationIntegrationTest {
             }
 
             assertMigrationOutcomes(dataSource);
+        }
+    }
+
+    @Test
+    void v36DiscoversTenantsForTheForcedRlsMigrationOwner() throws Exception {
+        try (EmbeddedPostgres postgres = EmbeddedPostgres.builder().start()) {
+            DataSource ownerDataSource = postgres.getPostgresDatabase();
+
+            Flyway.configure()
+                    .dataSource(ownerDataSource)
+                    .locations("classpath:db/migration")
+                    .cleanDisabled(true)
+                    .target("34")
+                    .load()
+                    .migrate();
+
+            deleteGroupProfile(ownerDataSource, "GENERAL_MANAGER");
+            try (Connection owner = ownerDataSource.getConnection();
+                 Statement statement = owner.createStatement()) {
+                statement.execute("CREATE ROLE " + MIGRATION_OWNER
+                        + " LOGIN PASSWORD 'test-only-password' NOSUPERUSER NOCREATEDB "
+                        + "NOCREATEROLE NOINHERIT NOBYPASSRLS");
+                statement.execute("GRANT USAGE, CREATE ON SCHEMA public TO " + MIGRATION_OWNER);
+                statement.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "
+                        + MIGRATION_OWNER);
+                statement.execute("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "
+                        + MIGRATION_OWNER);
+                statement.execute("ALTER TABLE tenant OWNER TO " + MIGRATION_OWNER);
+            }
+
+            DataSource migrationDataSource = postgres.getDatabase(MIGRATION_OWNER, "postgres");
+            try (Connection migration = migrationDataSource.getConnection();
+                 Statement statement = migration.createStatement()) {
+                assertEquals(0, scalarInt(statement, "SELECT count(*) FROM tenant"));
+            }
+
+            assertEquals(2, Flyway.configure()
+                    .dataSource(migrationDataSource)
+                    .locations("classpath:db/migration")
+                    .cleanDisabled(true)
+                    .load()
+                    .migrate()
+                    .migrationsExecuted);
+
+            try (Connection owner = ownerDataSource.getConnection();
+                 Statement statement = owner.createStatement()) {
+                statement.execute("SELECT set_config('app.tenant_id', '" + DEMO_TENANT + "', false)");
+                assertEquals("PUBLISHED", versionValue(statement, "GENERAL_MANAGER", 1,
+                        "lifecycle_status"));
+                assertEquals("DRAFT", versionValue(statement, "GENERAL_MANAGER", 2,
+                        "lifecycle_status"));
+                assertEquals(GENERAL_MANAGER_PERMISSIONS,
+                        permissionCodes(statement, "GENERAL_MANAGER", 1));
+                assertEquals(1, automaticPublicationAuditCount(
+                        statement, "GENERAL_MANAGER", "V36"));
+                assertEquals(1, scalarInt(statement, """
+                        SELECT CASE WHEN relrowsecurity AND relforcerowsecurity THEN 1 ELSE 0 END
+                        FROM pg_class
+                        WHERE oid = 'tenant'::regclass
+                        """));
+            }
+        }
+    }
+
+    private static void deleteGroupProfile(DataSource dataSource, String positionCode) throws Exception {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("SELECT set_config('app.tenant_id', '" + DEMO_TENANT + "', false)");
+            statement.executeUpdate("""
+                    DELETE FROM position_function_profile_permission item
+                    USING position_function_profile_version version,
+                          position_function_profile profile,
+                          position_definition position_item
+                    WHERE item.tenant_id = '%s'::uuid
+                      AND version.tenant_id = item.tenant_id
+                      AND version.id = item.profile_version_id
+                      AND profile.tenant_id = version.tenant_id
+                      AND profile.id = version.profile_id
+                      AND position_item.tenant_id = profile.tenant_id
+                      AND position_item.id = profile.position_id
+                      AND position_item.code = '%s'
+                    """.formatted(DEMO_TENANT, positionCode));
+            statement.executeUpdate("""
+                    DELETE FROM position_function_profile_version version
+                    USING position_function_profile profile,
+                          position_definition position_item
+                    WHERE version.tenant_id = '%s'::uuid
+                      AND profile.tenant_id = version.tenant_id
+                      AND profile.id = version.profile_id
+                      AND position_item.tenant_id = profile.tenant_id
+                      AND position_item.id = profile.position_id
+                      AND position_item.code = '%s'
+                    """.formatted(DEMO_TENANT, positionCode));
+            assertEquals(1, statement.executeUpdate("""
+                    DELETE FROM position_function_profile profile
+                    USING position_definition position_item
+                    WHERE profile.tenant_id = '%s'::uuid
+                      AND position_item.tenant_id = profile.tenant_id
+                      AND position_item.id = profile.position_id
+                      AND position_item.code = '%s'
+                      AND profile.scope_type = 'GROUP'
+                    """.formatted(DEMO_TENANT, positionCode)));
         }
     }
 
@@ -441,6 +544,14 @@ class PositionDefaultProfileMigrationIntegrationTest {
             Statement statement,
             String positionCode
     ) throws Exception {
+        return automaticPublicationAuditCount(statement, positionCode, "V35");
+    }
+
+    private static int automaticPublicationAuditCount(
+            Statement statement,
+            String positionCode,
+            String source
+    ) throws Exception {
         return scalarInt(statement, """
                 SELECT count(*)
                 FROM audit_log audit
@@ -455,12 +566,12 @@ class PositionDefaultProfileMigrationIntegrationTest {
                   AND audit.resource_type = 'POSITION_FUNCTION_PROFILE'
                   AND position_item.code = '%s'
                   AND audit.after_data ->> 'category' = 'SYSTEM'
-                  AND audit.after_data ->> 'source' = 'V35'
+                  AND audit.after_data ->> 'source' = '%s'
                   AND audit.after_data ->> 'profileId' = profile.id::text
                   AND audit.after_data ->> 'positionId' = position_item.id::text
                   AND audit.after_data ? 'authorizationScopeType'
                   AND (audit.after_data ->> 'permissionCount')::integer > 0
-                """.formatted(DEMO_TENANT, positionCode));
+                """.formatted(DEMO_TENANT, positionCode, source));
     }
 
     private static String loadMigrationSql() throws Exception {

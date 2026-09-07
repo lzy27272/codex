@@ -16,6 +16,7 @@ apps/ota-standalone-web/*.tsbuildinfo
 .env
 .env.*
 !.env.example
+!apps/web/.env.pilot
 docs/releases/TECH-V0.2-RELEASE-GATE-INPUTS.json
 docs/releases/TECH-V0.2-EXTERNAL-EVIDENCE-BUNDLE.json
 docs/releases/external-evidence/

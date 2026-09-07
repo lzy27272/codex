@@ -17,7 +17,7 @@ const browserExecutable = process.env.UAT_BROWSER_EXECUTABLE
     'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'].find(existsSync)
 
 const productVersion = 'TECH-V0.2-PILOT.7'
-const databaseTarget = 'V22'
+const databaseTarget = 'V37'
 const authHeaderName = 'x-hotel-ai-authorization'
 const tokenStorageKey = 'hotel-ai-os-access-token'
 const allowedLoginPostPath = '/api/v1/auth/login'
@@ -287,14 +287,20 @@ async function gotoWithRetry(page, url, attempts = 3) {
 
 async function openLogin(page) {
   await gotoWithRetry(page, `${webBase}/#/workbench`)
-  await page.locator('.login-card').waitFor({ state: 'visible', timeout: 30_000 })
+  await page.locator('form[aria-label="中台账号登录"]').waitFor({ state: 'visible', timeout: 30_000 })
 }
 
 async function loginAndLoadIdentity(page, loginName, password) {
+  const loginResponsePromise = page.waitForResponse((response) => isLoginPath(requestPath(response.url())) && response.request().method() === 'POST', { timeout: 30_000 })
   const meResponsePromise = page.waitForResponse((response) => isMePath(requestPath(response.url())) && response.request().method() === 'GET', { timeout: 30_000 })
   await page.locator('input[autocomplete="username"]').fill(loginName)
   await page.locator('input[autocomplete="current-password"]').fill(password)
-  await page.locator('button.login-submit').click()
+  await page.getByRole('button', { name: '登录中台', exact: true }).click()
+  const loginResponse = await loginResponsePromise
+  if (!loginResponse.ok()) {
+    void meResponsePromise.catch(() => undefined)
+    throw new Error(`/auth/login returned HTTP ${loginResponse.status()} for ${loginName}`)
+  }
   const meResponse = await meResponsePromise
   if (!meResponse.ok()) throw new Error(`/iam/me returned HTTP ${meResponse.status()} for ${loginName}`)
   const identity = await meResponse.json()
@@ -370,11 +376,13 @@ async function verifyAccountSwitch(browser) {
     const frontIdentity = assertIdentity(frontIdentityRaw, frontRole)
     const frontHeaderChecks = state.meAuthorizationChecks.slice(frontHeaderStart)
     const frontHeaderPassed = frontHeaderChecks.some((check) => check.present && check.bearerSchemeValid)
-    const frontToken = await page.evaluate((key) => window.localStorage.getItem(key), tokenStorageKey)
-    const tokenPresentBeforeLogout = Boolean(frontToken)
+    const frontTokenAbsentFromPersistentStorage = await page.evaluate(
+      (key) => window.localStorage.getItem(key) === null,
+      tokenStorageKey,
+    )
 
-    await page.locator('button.logout-button').click()
-    await page.locator('.login-card').waitFor({ state: 'visible', timeout: 30_000 })
+    await page.getByRole('button', { name: '退出', exact: true }).click()
+    await page.locator('form[aria-label="中台账号登录"]').waitFor({ state: 'visible', timeout: 30_000 })
     const tokenClearedAfterLogout = await page.evaluate((key) => window.localStorage.getItem(key) === null, tokenStorageKey)
 
     const ceoHeaderStart = state.meAuthorizationChecks.length
@@ -382,10 +390,13 @@ async function verifyAccountSwitch(browser) {
     const ceoIdentity = assertIdentity(ceoIdentityRaw, ceoRole)
     const ceoHeaderChecks = state.meAuthorizationChecks.slice(ceoHeaderStart)
     const ceoHeaderPassed = ceoHeaderChecks.some((check) => check.present && check.bearerSchemeValid)
-    const ceoToken = await page.evaluate((key) => window.localStorage.getItem(key), tokenStorageKey)
-    const tokenChanged = Boolean(frontToken && ceoToken && frontToken !== ceoToken)
+    const ceoTokenAbsentFromPersistentStorage = await page.evaluate(
+      (key) => window.localStorage.getItem(key) === null,
+      tokenStorageKey,
+    )
     const passed = frontIdentity.passed && ceoIdentity.passed && frontHeaderPassed && ceoHeaderPassed &&
-      tokenPresentBeforeLogout && tokenClearedAfterLogout && tokenChanged && state.loginPostCount === 2 &&
+      frontTokenAbsentFromPersistentStorage && tokenClearedAfterLogout && ceoTokenAbsentFromPersistentStorage &&
+      state.loginPostCount === 2 &&
       state.forbiddenWriteRequests.length === 0 && unexpectedApiFailures(state).length === 0
     return {
       contextReused: true,
@@ -398,9 +409,9 @@ async function verifyAccountSwitch(browser) {
         ceoIamMePresentWithBearerScheme: ceoHeaderPassed,
         valuesPersistedInEvidence: false,
       },
-      tokenPresentBeforeLogout,
+      frontTokenAbsentFromPersistentStorage,
       tokenClearedAfterLogout,
-      tokenChanged,
+      ceoTokenAbsentFromPersistentStorage,
       tokenValuesPersistedInEvidence: false,
       loginPostCount: state.loginPostCount,
       forbiddenWriteRequests: state.forbiddenWriteRequests,
@@ -527,7 +538,7 @@ const report = {
   generatedAt: new Date().toISOString(),
   version: productVersion,
   databaseTarget,
-  profile: 'V22_BROWSER_READ_ONLY',
+  profile: 'V37_BROWSER_READ_ONLY',
   webBase,
   passed,
   summary: {

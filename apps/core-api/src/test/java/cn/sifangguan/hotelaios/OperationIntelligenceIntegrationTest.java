@@ -594,14 +594,33 @@ class OperationIntelligenceIntegrationTest {
                   and grant_item.role_id = '19400000-0000-0000-0000-000000000002'::uuid
                   and permission_item.code in ('operation-export.create', 'operation-export.download')
                 """, TENANT)).isEqualTo(2);
-        jdbc.update("""
+        assertThat(jdbc.update("""
+                delete from position_function_profile_permission grant_item
+                using position_function_profile_version version,
+                      position_function_profile profile,
+                      position_definition position_item,
+                      permission permission_item
+                where grant_item.tenant_id = ?::uuid
+                  and version.tenant_id = grant_item.tenant_id
+                  and version.id = grant_item.profile_version_id
+                  and version.lifecycle_status = 'PUBLISHED'
+                  and profile.tenant_id = version.tenant_id
+                  and profile.id = version.profile_id
+                  and profile.scope_type = 'GROUP'
+                  and position_item.tenant_id = profile.tenant_id
+                  and position_item.id = profile.position_id
+                  and position_item.code = 'GENERAL_MANAGER'
+                  and permission_item.id = grant_item.permission_id
+                  and permission_item.code = 'daily-operation.read'
+                """, TENANT)).isOne();
+        assertThat(jdbc.update("""
                 delete from role_permission grant_item
                 using permission permission_item
                 where grant_item.tenant_id = ?::uuid
                   and grant_item.role_id = '19400000-0000-0000-0000-000000000002'::uuid
                   and permission_item.id = grant_item.permission_id
                   and permission_item.code = 'daily-operation.read'
-                """, TENANT);
+                """, TENANT)).isOne();
 
         String body = """
                 {

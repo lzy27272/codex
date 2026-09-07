@@ -32,7 +32,7 @@
 - 状态：Unreleased / `TECH-V0.2-PILOT.7` INTERNAL PILOT PATCH / FORMAL RELEASE STATUS UNCHANGED。
 - 页面：桌面端恢复固定左侧垂直导航，移动端保留五栏底部导航；顶栏只承载运行上下文与账号操作，避免横向菜单截断。
 - API与权限：新增`GET /api/v1/dashboards/hotels`，仅要求`dashboard.hotel`并按租户和组织范围返回可见门店；`/dashboards/operations`继续只面向具有`dashboard.operations`的区域多门店角色。
-- 岗位治理：新增Flyway V37的`ui.module.*`展示能力，岗位模块可见性与页面内操作权限分别配置；标准岗位按评审矩阵迁移，自定义岗位只做一次兼容推导，后续由已发布岗位权限配置决定。
+- 岗位治理：新增Flyway V37的`ui.module.*`展示能力，岗位模块可见性与页面内操作权限分别配置；标准岗位按评审矩阵迁移，自定义岗位只做一次兼容推导，后续由已发布岗位权限配置决定。V37同时仅对V35/V36自动发布且未人工编辑的标准管理岗恢复既有V18管理闭环权限，人工岗位配置与门店覆盖不被扩权。
 - 验证：Web测试52/52、TypeScript和Pilot构建通过；Edge + Playwright在1860、1440与390像素视口完成固定侧栏、五栏底部导航及无页面横向溢出检查。后端、真实PostgreSQL迁移和公网八角色回归以部署门禁实跑结果为准。
 
 #### CHG-20260812-046：启动行政人事部KPI考核与绩效复盘中心全阶段开发

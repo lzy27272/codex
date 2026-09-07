@@ -122,6 +122,37 @@ FROM unnest(ARRAY[
     'wecom-bindings', 'wecom-onboarding', 'notifications', 'all-functions'
 ]) AS modules(module_id);
 
+-- V35/V36 made a versioned position profile authoritative for assignment
+-- identities. Their standard manager matrix accidentally omitted part of the
+-- already-released V18 manager workflow, so buttons backed by those APIs began
+-- returning 403 even though the legacy role grant still described the role as
+-- a manager. Restore that frozen V18 subset only for system-published default
+-- profiles below; human-managed profiles and hotel overrides remain untouched.
+CREATE TEMP TABLE v37_role_action_repair_matrix (
+    role_code VARCHAR(64) NOT NULL,
+    permission_code VARCHAR(120) NOT NULL,
+    PRIMARY KEY (role_code, permission_code)
+) ON COMMIT DROP;
+
+INSERT INTO v37_role_action_repair_matrix (role_code, permission_code)
+SELECT role_code, permission_code
+FROM unnest(ARRAY[
+    'HOUSEKEEPING_SUPERVISOR', 'FRONT_OFFICE_SUPERVISOR',
+    'ASSISTANT_GENERAL_MANAGER', 'GENERAL_MANAGER', 'OTA_OPERATION_MANAGER'
+]) AS roles(role_code)
+CROSS JOIN unnest(ARRAY[
+    'daily-report.read', 'daily-report.submit', 'daily-report.team-read',
+    'daily-report.review', 'daily-report.revision-review',
+    'daily-report-template.read', 'daily-report-template.store-supplement',
+    'daily-operation.read', 'issue.confirm', 'issue.assign', 'issue.close',
+    'issue.reopen', 'task-candidate.read', 'task-candidate.manage',
+    'task-candidate.confirm', 'task-candidate.reject', 'task-candidate.retry',
+    'operation-snapshot.read', 'operation-snapshot.retry',
+    'operation-snapshot.compare', 'operation-export.create',
+    'operation-export.download', 'ai-recommendation.read',
+    'ai-recommendation.feedback', 'ai-recommendation.adopt'
+]) AS permissions(permission_code);
+
 -- One-time compatibility inference for custom positions. From this migration
 -- onward administrators select module grants explicitly in the position editor.
 CREATE TEMP TABLE v37_module_action_matrix (
@@ -184,6 +215,26 @@ BEGIN
     END IF;
 END $$;
 
+DO $$
+DECLARE
+    invalid_permissions TEXT;
+BEGIN
+    SELECT string_agg(matrix.permission_code, ', ' ORDER BY matrix.permission_code)
+      INTO invalid_permissions
+      FROM (
+          SELECT DISTINCT permission_code
+          FROM v37_role_action_repair_matrix
+      ) matrix
+      LEFT JOIN permission permission_item
+        ON permission_item.code = matrix.permission_code
+       AND permission_item.delegable_to_position = true
+     WHERE permission_item.id IS NULL;
+    IF invalid_permissions IS NOT NULL THEN
+        RAISE EXCEPTION 'V37 action repair contains unknown or protected permissions: %',
+            invalid_permissions;
+    END IF;
+END $$;
+
 -- Match V36's FORCE-RLS-safe tenant discovery. Transactional DDL restores FORCE
 -- automatically if any tenant migration fails.
 ALTER TABLE tenant NO FORCE ROW LEVEL SECURITY;
@@ -194,6 +245,50 @@ DECLARE
 BEGIN
     FOR tenant_record IN SELECT id FROM tenant ORDER BY id LOOP
         PERFORM set_config('app.tenant_id', tenant_record.id::text, true);
+
+        -- Repair only the immutable V1 publication and untouched V2 draft
+        -- created by the V35/V36 automatic default publication. The audit and
+        -- version-shape predicates deliberately exclude every human-managed
+        -- profile and every hotel override.
+        INSERT INTO position_function_profile_permission
+            (tenant_id, profile_version_id, permission_id)
+        SELECT tenant_record.id, version.id, permission_item.id
+        FROM position_function_profile profile
+        JOIN position_definition position_item
+          ON position_item.tenant_id = profile.tenant_id
+         AND position_item.id = profile.position_id
+        JOIN position_function_profile_version version
+          ON version.tenant_id = profile.tenant_id
+         AND version.profile_id = profile.id
+        JOIN v37_role_action_repair_matrix repair
+          ON repair.role_code = position_item.code
+        JOIN permission permission_item
+          ON permission_item.code = repair.permission_code
+         AND permission_item.delegable_to_position = true
+        WHERE profile.tenant_id = tenant_record.id
+          AND profile.scope_type = 'GROUP'
+          AND (
+              (version.version_no = 1 AND version.lifecycle_status = 'PUBLISHED')
+              OR (
+                  version.version_no = 2
+                  AND version.lifecycle_status = 'DRAFT'
+                  AND version.row_version = 0
+                  AND version.copied_from_version_id IS NOT NULL
+              )
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM audit_log audit
+              WHERE audit.tenant_id = profile.tenant_id
+                AND audit.action = 'SYSTEM_POSITION_PROFILE_DEFAULT_PUBLISHED'
+                AND audit.resource_type = 'POSITION_FUNCTION_PROFILE'
+                AND audit.resource_id = profile.id
+                AND audit.after_data ->> 'category' = 'SYSTEM'
+                AND audit.after_data ->> 'source' IN ('V35', 'V36')
+                AND audit.after_data ->> 'profileId' = profile.id::text
+                AND audit.after_data ->> 'positionId' = position_item.id::text
+          )
+        ON CONFLICT DO NOTHING;
 
         -- Frozen standard positions get the reviewed role-specific module set
         -- on both active draft and published versions, including hotel overrides.
@@ -343,6 +438,19 @@ BEGIN
         JOIN v37_role_module_matrix matrix ON matrix.role_code = role.code
         JOIN permission module_permission
           ON module_permission.code = 'ui.module.' || matrix.module_id
+        WHERE role.tenant_id = tenant_record.id
+        ON CONFLICT DO NOTHING;
+
+        -- Restore the same released manager workflow for legacy/account-wide
+        -- role resolution. Assignment identities still use the selected
+        -- published position profile as their authoritative action grant.
+        INSERT INTO role_permission (tenant_id, role_id, permission_id)
+        SELECT tenant_record.id, role.id, permission_item.id
+        FROM app_role role
+        JOIN v37_role_action_repair_matrix repair ON repair.role_code = role.code
+        JOIN permission permission_item
+          ON permission_item.code = repair.permission_code
+         AND permission_item.delegable_to_position = true
         WHERE role.tenant_id = tenant_record.id
         ON CONFLICT DO NOTHING;
 

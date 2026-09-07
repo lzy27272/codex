@@ -1405,25 +1405,35 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
     }
 
     private void publishSelectableProfile(UUID positionId) {
-        int published = jdbc.update("""
+        int configured = jdbc.update("""
                 update position_function_profile_version version
-                set lifecycle_status = 'PUBLISHED', authorization_scope_type = 'ORG_UNIT',
+                set authorization_scope_type = 'ORG_UNIT',
                     wecom_self_selectable = true, published_by = ?, published_at = now()
                 from position_function_profile profile
                 where version.tenant_id = profile.tenant_id and version.profile_id = profile.id
                   and profile.tenant_id = ? and profile.position_id = ?
-                  and profile.scope_type = 'GROUP' and version.lifecycle_status = 'DRAFT'
+                  and profile.scope_type = 'GROUP' and version.lifecycle_status = 'PUBLISHED'
                 """, CEO, TENANT, positionId);
-        if (published == 0) {
-            assertThat(jdbc.queryForObject("""
-                    select count(*) from position_function_profile_version version
-                    join position_function_profile profile
-                      on profile.tenant_id = version.tenant_id and profile.id = version.profile_id
-                    where profile.tenant_id = ? and profile.position_id = ?
-                      and profile.scope_type = 'GROUP' and version.lifecycle_status = 'PUBLISHED'
-                      and version.wecom_self_selectable = true
-                    """, Integer.class, TENANT, positionId)).isOne();
+        if (configured == 0) {
+            configured = jdbc.update("""
+                    update position_function_profile_version version
+                    set lifecycle_status = 'PUBLISHED', authorization_scope_type = 'ORG_UNIT',
+                        wecom_self_selectable = true, published_by = ?, published_at = now()
+                    from position_function_profile profile
+                    where version.tenant_id = profile.tenant_id and version.profile_id = profile.id
+                      and profile.tenant_id = ? and profile.position_id = ?
+                      and profile.scope_type = 'GROUP' and version.lifecycle_status = 'DRAFT'
+                    """, CEO, TENANT, positionId);
         }
+        assertThat(configured).isOne();
+        assertThat(jdbc.queryForObject("""
+                select count(*) from position_function_profile_version version
+                join position_function_profile profile
+                  on profile.tenant_id = version.tenant_id and profile.id = version.profile_id
+                where profile.tenant_id = ? and profile.position_id = ?
+                  and profile.scope_type = 'GROUP' and version.lifecycle_status = 'PUBLISHED'
+                  and version.wecom_self_selectable = true
+                """, Integer.class, TENANT, positionId)).isOne();
     }
 
     private WeComDirectoryOnboardingService lifecycleService() {

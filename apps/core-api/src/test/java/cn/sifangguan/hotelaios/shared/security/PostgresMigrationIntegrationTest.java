@@ -54,7 +54,7 @@ class PostgresMigrationIntegrationTest {
                     .migrate()
                     .migrationsExecuted;
 
-            assertEquals(36, migrations);
+            assertEquals(37, migrations);
 
             try (Connection owner = ownerDataSource.getConnection();
                  Statement statement = owner.createStatement()) {

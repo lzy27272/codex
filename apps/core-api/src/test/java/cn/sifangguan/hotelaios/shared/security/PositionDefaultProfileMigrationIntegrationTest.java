@@ -67,6 +67,9 @@ class PositionDefaultProfileMigrationIntegrationTest {
             "operation-snapshot.compare",
             "operation-export.create",
             "operation-export.download",
+            "ai-recommendation.read",
+            "ai-recommendation.feedback",
+            "ai-recommendation.adopt",
             "kpi.metric.read",
             "kpi.template.read",
             "kpi.scorecard.read-own",
@@ -79,6 +82,14 @@ class PositionDefaultProfileMigrationIntegrationTest {
             "workbench", "hotel-dashboard", "team-work", "tasks",
             "daily-reports-my", "daily-operations", "kpi-center", "rules",
             "evaluations", "notifications", "all-functions"
+    );
+    private static final Set<String> RESTORED_MANAGER_WORKFLOW_PERMISSIONS = Set.of(
+            "daily-report-template.store-supplement",
+            "task-candidate.read", "task-candidate.manage", "task-candidate.confirm",
+            "task-candidate.reject", "task-candidate.retry",
+            "operation-snapshot.read", "operation-snapshot.retry", "operation-snapshot.compare",
+            "operation-export.create", "operation-export.download",
+            "ai-recommendation.read", "ai-recommendation.feedback", "ai-recommendation.adopt"
     );
 
     @Test
@@ -391,6 +402,8 @@ class PositionDefaultProfileMigrationIntegrationTest {
                     .contains("operations-dashboard"));
             assertTrue(permissionCodes(statement, "OTA_OPERATION_MANAGER", 1)
                     .contains("dashboard.operations"));
+            assertTrue(permissionCodes(statement, "OTA_OPERATION_MANAGER", 1)
+                    .containsAll(RESTORED_MANAGER_WORKFLOW_PERMISSIONS));
             assertTrue(moduleIds(statement, "OTA_OPERATION_MANAGER", 1)
                     .contains("operations-dashboard"));
             assertFalse(moduleIds(statement, "OTA_OPERATION_MANAGER", 1)
@@ -426,6 +439,9 @@ class PositionDefaultProfileMigrationIntegrationTest {
                       AND permission_item.delegable_to_position = false
                     """.formatted(DEMO_TENANT)));
             assertEquals(1, automaticPublicationAuditCount(statement, "GENERAL_MANAGER"));
+
+            assertTrue(permissionCodes(statement, "FRONT_OFFICE_SUPERVISOR", 1)
+                    .containsAll(RESTORED_MANAGER_WORKFLOW_PERMISSIONS));
 
             assertEquals("DRAFT", versionValue(statement, "FRONT_DESK", 1,
                     "lifecycle_status"));

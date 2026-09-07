@@ -233,6 +233,18 @@ const DEFAULT_MODULE_SETS = new Map<RolePresentationKey, ReadonlySet<AppRouteId>
     .map((policy) => [policy.key, new Set(policy.desktopModuleIds ?? [])]),
 )
 
+export const MODULE_PERMISSION_PREFIX = 'ui.module.'
+
+export function modulePermissionCode(moduleId: AppRouteId): string {
+  return `${MODULE_PERMISSION_PREFIX}${moduleId}`
+}
+
+export function moduleIdFromPermission(permissionCode: string): AppRouteId | undefined {
+  if (!permissionCode.startsWith(MODULE_PERMISSION_PREFIX)) return undefined
+  const moduleId = permissionCode.slice(MODULE_PERMISSION_PREFIX.length)
+  return moduleId ? moduleId as AppRouteId : undefined
+}
+
 /** Resolve only explicit, reviewed role codes and aliases. Custom positions fail open to backend visibility. */
 export function resolveRolePresentationPolicy(roleCodeOrAlias?: string | null): RolePresentationPolicy {
   if (!roleCodeOrAlias?.trim()) return POLICIES.GENERIC
@@ -262,9 +274,8 @@ export function resolveFullAccountPresentationRole(roleCodes: readonly string[])
 
 /**
  * Last-resort compatibility for demo data or an older identity payload that does not
- * expose assignment permissionCodes. Live published profiles are authoritative and
- * must not pass through this default matrix, otherwise an administrator could not
- * add ordinary modules to a position.
+ * expose assignment permissionCodes. New profiles use explicit ui.module.* grants;
+ * this matrix remains the reviewed fallback for pre-migration identities.
  */
 export function applyRoleDefaultsForFallback<T extends { id: AppRouteId }>(
   permissionVisibleItems: readonly T[],
@@ -274,6 +285,28 @@ export function applyRoleDefaultsForFallback<T extends { id: AppRouteId }>(
   const allowed = DEFAULT_MODULE_SETS.get(policy.key)
   if (!allowed) return [...permissionVisibleItems]
   return permissionVisibleItems.filter((item) => allowed.has(item.id))
+}
+
+/**
+ * Top-level module visibility is an explicit presentation capability. Action
+ * permissions are evaluated before this function and continue to protect page
+ * controls and API calls independently. Profiles created before module grants
+ * existed retain the reviewed role defaults as a compatibility fallback.
+ */
+export function applyPublishedModuleVisibility<T extends { id: AppRouteId }>(
+  permissionVisibleItems: readonly T[],
+  grantedPermissionCodes: readonly string[],
+  roleCodeOrAlias?: string | null,
+): T[] {
+  const enabledModules = new Set(
+    grantedPermissionCodes
+      .map(moduleIdFromPermission)
+      .filter((moduleId): moduleId is AppRouteId => Boolean(moduleId)),
+  )
+  if (!enabledModules.size) {
+    return applyRoleDefaultsForFallback(permissionVisibleItems, roleCodeOrAlias)
+  }
+  return permissionVisibleItems.filter((item) => enabledModules.has(item.id))
 }
 
 /** Normalize a page-level route to the desktop module that owns it. */

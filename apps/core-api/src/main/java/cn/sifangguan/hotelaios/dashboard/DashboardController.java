@@ -27,6 +27,11 @@ public class DashboardController {
         return service.hotelDashboard(hotelId);
     }
 
+    @GetMapping("/hotels")
+    public Map<String, Object> accessibleHotels() {
+        return service.accessibleHotels();
+    }
+
     @GetMapping("/operations")
     public Map<String, Object> operations() {
         return service.operationsDashboard();

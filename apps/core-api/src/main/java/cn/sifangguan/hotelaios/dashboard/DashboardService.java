@@ -123,6 +123,39 @@ public class DashboardService {
     }
 
     @Transactional(readOnly = true)
+    public Map<String, Object> accessibleHotels() {
+        accessPolicy.requirePermission("dashboard.hotel");
+        TenantPrincipal principal = prepare();
+        if (!principal.hasTenantScope() && principal.orgScopes().isEmpty()) {
+            return Map.of("hotels", List.of());
+        }
+        MapSqlParameterSource params = base(principal);
+        String visibility = "";
+        if (!principal.hasTenantScope()) {
+            params.addValue("scopeIds", principal.orgScopes());
+            visibility = """
+                    and exists (
+                      select 1 from org_unit_closure visible
+                      where visible.tenant_id = hotel.tenant_id
+                        and (
+                          (visible.descendant_id = hotel.id and visible.ancestor_id in (:scopeIds))
+                          or (visible.ancestor_id = hotel.id and visible.descendant_id in (:scopeIds))
+                        )
+                    )
+                    """;
+        }
+        List<Map<String, Object>> hotels = jdbc.queryForList("""
+                select hotel.id, hotel.code, hotel.name, profile.city, profile.room_count
+                from org_unit hotel
+                join hotel_profile profile
+                  on profile.tenant_id = hotel.tenant_id and profile.org_unit_id = hotel.id
+                where hotel.tenant_id = :tenantId
+                  and hotel.unit_type = 'HOTEL' and hotel.status = 'ACTIVE'
+                """ + visibility + " order by hotel.name, hotel.id", params);
+        return Map.of("hotels", hotels);
+    }
+
+    @Transactional(readOnly = true)
     public Map<String, Object> operationsDashboard() {
         accessPolicy.requirePermission("dashboard.operations");
         TenantPrincipal principal = prepare();

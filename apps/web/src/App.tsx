@@ -60,7 +60,7 @@ import {
   type AppSectionId,
 } from './app/routeConfig'
 import {
-  applyRoleDefaultsForFallback,
+  applyPublishedModuleVisibility,
   isRouteAllowedByRoleDefaults,
   resolveDailyReportsTarget,
   resolveFullAccountPresentationRole,
@@ -102,7 +102,7 @@ const navigation: Array<{ id: AppRouteId; sectionId?: string; label: string; ico
   { id: 'investments', label: '投资测算', icon: '¥', group: '投资决策', permissions: [permissionCodes.investment.read] },
   { id: 'work-packages', label: '工作包中心', icon: '▦', group: '标准与工作', permissions: ['work-package.read', 'work-package.manage', 'standard.read'] },
   { id: 'my-work', label: '我的工作', icon: '✓', permissions: ['work-record.read', 'work-record.submit', 'work.submit'] },
-  { id: 'team-work', label: '团队工作', icon: '◎', permissions: ['work-record.review', 'work-record.read-team'] },
+  { id: 'team-work', label: '团队工作', icon: '◎', permissions: ['work-record.review'] },
   { id: 'daily-reports-my', sectionId: 'daily-reports', label: '日报中心', icon: '▣', group: '日报与运营', permissions: [permissionCodes.dailyReport.readOwn, permissionCodes.dailyReport.submit, permissionCodes.dailyReport.readTeam] },
   { id: 'daily-operations', label: '日运营中心', icon: '◫', permissions: [permissionCodes.dailyOperations.readHotel, permissionCodes.dailyOperations.readCrossHotel] },
   { id: 'kpi-center', sectionId: 'kpi', label: 'KPI绩效中心', icon: '◎', group: '行政人事', permissions: [permissionCodes.kpi.scorecardReadOwn, permissionCodes.kpi.scorecardReadTeam, permissionCodes.kpi.scorecardReadAll, permissionCodes.kpi.templateRead] },
@@ -197,12 +197,17 @@ function Metric({ label: title, value, hint, tone = 'blue', onClick }: { label: 
 
 function Workbench({ identity, permissions, go }: { identity: RoleContext; permissions: string[]; go: Navigate }) {
   const hasAssignment = Boolean(identity.assignmentId)
-  const canReview = permissions.includes('task.review')
+  const allows = (permission: string) => permissions.includes('*') || permissions.includes(permission)
+  const canReadOwnWork = hasAssignment && (allows('work-record.read') || allows('work-record.submit') || allows('work.submit'))
+  const canReadTeamWork = allows('work-record.review')
+  const canReadTasks = allows('task.read') || allows('task.act') || allows('task.review')
+  const canReadNotifications = allows('notification.read')
+  const canReview = allows('task.review')
   const primaryTaskView = hasAssignment ? 'mine' : 'team'
-  const myWork = useResource(`${identity.key}:my-work`, () => hasAssignment ? loadMyWork(identity) : Promise.resolve({ data: [], source: 'api' as const }), [], 30_000)
-  const tasks = useResource(`${identity.key}:tasks`, () => loadTasks(identity, { view: primaryTaskView }), [], 15_000)
+  const myWork = useResource(`${identity.key}:my-work:${canReadOwnWork}`, () => canReadOwnWork ? loadMyWork(identity) : Promise.resolve({ data: [], source: 'api' as const }), [], 30_000)
+  const tasks = useResource(`${identity.key}:tasks:${canReadTasks}`, () => canReadTasks ? loadTasks(identity, { view: primaryTaskView }) : Promise.resolve({ data: [], source: 'api' as const }), [], 15_000)
   const reviewTaskResource = useResource(`${identity.key}:review-tasks:${canReview}`, () => canReview ? loadTasks(identity, { view: 'review' }) : Promise.resolve({ data: [], source: 'api' as const }), [], 15_000)
-  const notices = useResource(`${identity.key}:notices`, () => loadNotifications(identity), [], 15_000)
+  const notices = useResource(`${identity.key}:notices:${canReadNotifications}`, () => canReadNotifications ? loadNotifications(identity) : Promise.resolve({ data: [], source: 'api' as const }), [], 15_000)
   const loading = myWork.loading || tasks.loading || reviewTaskResource.loading || notices.loading
   const scopedWork = myWork.data
   const scopedTasks = tasks.data
@@ -220,21 +225,21 @@ function Workbench({ identity, permissions, go }: { identity: RoleContext; permi
     </section>
     {loading ? <DataState loading onRetry={() => void Promise.all([myWork.reload(), tasks.reload(), reviewTaskResource.reload(), notices.reload()])} /> : <>
       <section className="metrics-grid">
-        <Metric label={hasAssignment ? '今日待完成' : '岗位待办'} value={pendingWork.length} hint={hasAssignment ? `当前任职工作 ${scopedWork.length} 项` : '管理账号查看授权团队工作'} onClick={() => go(hasAssignment ? 'my-work' : 'team-work', { status: 'PENDING_WORK' })} />
-        <Metric label="执行中任务" value={activeTasks.length} hint={`${scopedTasks.filter((x) => x.slaStatus === 'OVERDUE').length} 项已逾期`} tone="teal" onClick={() => go('tasks', { view: primaryTaskView, status: 'ACTIVE' })} />
+        {(canReadOwnWork || canReadTeamWork) && <Metric label={hasAssignment ? '今日待完成' : '岗位待办'} value={pendingWork.length} hint={hasAssignment ? `当前任职工作 ${scopedWork.length} 项` : '管理账号查看授权团队工作'} onClick={() => go(hasAssignment ? 'my-work' : 'team-work', { status: 'PENDING_WORK' })} />}
+        {canReadTasks && <Metric label="执行中任务" value={activeTasks.length} hint={`${scopedTasks.filter((x) => x.slaStatus === 'OVERDUE').length} 项已逾期`} tone="teal" onClick={() => go('tasks', { view: primaryTaskView, status: 'ACTIVE' })} />}
         {canReview && <Metric label="待我验收" value={reviewTasks.length} hint="有标准按标准评价，无标准由验收人人工判定" tone="gold" onClick={() => go('tasks', { view: 'review' })} />}
-        <Metric label="未读通知" value={unread.length} hint="任务、逾期与升级提醒" tone="violet" onClick={() => go('notifications', { unread: 'true' })} />
+        {canReadNotifications && <Metric label="未读通知" value={unread.length} hint="任务、逾期与升级提醒" tone="violet" onClick={() => go('notifications', { unread: 'true' })} />}
       </section>
       <section className="dashboard-grid">
-        <article className="panel span-2"><header><div><span className="panel-kicker">{hasAssignment ? '今日工作' : '管理范围'}</span><h2>{hasAssignment ? '今日岗位工作' : '集团管理视图'}</h2></div><button className="link-button" onClick={() => go(hasAssignment ? 'my-work' : 'team-work')}>{hasAssignment ? '查看全部' : '查看团队执行'}</button></header>
+        {(canReadOwnWork || canReadTeamWork) && <article className="panel span-2"><header><div><span className="panel-kicker">{hasAssignment ? '今日工作' : '管理范围'}</span><h2>{hasAssignment ? '今日岗位工作' : '集团管理视图'}</h2></div><button className="link-button" onClick={() => go(hasAssignment ? 'my-work' : 'team-work')}>{hasAssignment ? '查看全部' : '查看团队执行'}</button></header>
           {hasAssignment ? <div className="compact-list">{scopedWork.slice(0, 5).map((item) => <div key={item.id}><i className={`work-dot ${item.status.toLowerCase()}`} /><span><strong>{item.title}</strong><small>{item.targetOrgName} · {item.packageName}</small></span><span className="compact-meta"><Status value={item.status} /><small>{formatDate(item.dueAt)}</small></span></div>)}</div> : <div className="state-card"><b>◎</b><strong>当前为集团管理账号</strong><span>CEO 等无岗位任职的账号通过团队工作、任务中心和驾驶舱管理，不生成虚假的个人工作。</span></div>}
-        </article>
-        <article className="panel"><header><div><span className="panel-kicker">消息提醒</span><h2>管理提醒</h2></div><button className="link-button" onClick={() => go('notifications')}>通知中心</button></header>
+        </article>}
+        {canReadNotifications && <article className="panel"><header><div><span className="panel-kicker">消息提醒</span><h2>管理提醒</h2></div><button className="link-button" onClick={() => go('notifications')}>通知中心</button></header>
           <div className="notice-list">{scopedNotices.slice(0, 4).map((item) => <div className={item.readAt ? 'read' : ''} key={item.id}><i /><span><strong>{item.title}</strong><small>{item.content}</small></span></div>)}</div>
-        </article>
-        <article className="panel span-3"><header><div><span className="panel-kicker">任务执行</span><h2>执行任务</h2></div><button className="link-button" onClick={() => go('tasks', { view: primaryTaskView })}>进入任务中心</button></header>
+        </article>}
+        {canReadTasks && <article className="panel span-3"><header><div><span className="panel-kicker">任务执行</span><h2>执行任务</h2></div><button className="link-button" onClick={() => go('tasks', { view: primaryTaskView })}>进入任务中心</button></header>
           <TaskRows tasks={scopedTasks.slice(0, 5)} onSelect={(task) => go('tasks', { view: primaryTaskView, taskId: task.id })} />
-        </article>
+        </article>}
       </section>
     </>}
   </>
@@ -847,9 +852,11 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     assignmentPermissionsPresent: selectedAssignment?.permissionCodes !== undefined,
   })
   const secondaryIdentityReady = canLoadSecondaryResources(authMode, me.loading, me.error)
+  const canReadSidebarNotifications = activePermissions.includes('*')
+    || activePermissions.includes('notification.read')
   const unreadResource = useResource<NotificationItem[]>(
-    `${activeIdentity.key}:sidebar-notices:${secondaryIdentityReady ? 'ready' : 'pending'}`,
-    async () => secondaryIdentityReady
+    `${activeIdentity.key}:sidebar-notices:${secondaryIdentityReady && canReadSidebarNotifications ? 'ready' : 'pending'}`,
+    async () => secondaryIdentityReady && canReadSidebarNotifications
       ? loadNotifications(activeIdentity)
       : { data: [], source: 'api' as const },
     [],
@@ -865,10 +872,12 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       item.permissions.some((permission) => activePermissions.includes(permission))
   }), [activeIdentity.assignmentId, activePermissions, me.source])
   const visibleNavigation = useMemo(
-    () => useRoleDefaultsFallback
-      ? applyRoleDefaultsForFallback(permissionVisibleNavigation, presentationRoleCode)
-      : permissionVisibleNavigation,
-    [permissionVisibleNavigation, presentationRoleCode, useRoleDefaultsFallback],
+    () => applyPublishedModuleVisibility(
+      permissionVisibleNavigation,
+      activePermissions,
+      presentationRoleCode,
+    ),
+    [activePermissions, permissionVisibleNavigation, presentationRoleCode],
   )
   const navigationTarget = (id: AppRouteId): AppRouteId => {
     if (id !== 'daily-reports-my') return id
@@ -973,7 +982,8 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
   const mobileNavigationItems = useMemo(() => {
     const visibleIds = new Set(visibleNavigation.map((item) => item.id))
     const resolveMobileTarget = (tab: MobilePresentationTab): AppRouteId | undefined => {
-      if (tab.target === 'all-functions' || tab.target === 'workbench') return tab.target
+      if (tab.target === 'all-functions') return tab.target
+      if (tab.target === 'workbench' && visibleIds.has('workbench')) return tab.target
       if (tab.target === 'daily-reports-my' && visibleIds.has('daily-reports-my')) return navigationTarget(tab.target)
       if (visibleIds.has(tab.target)) return navigationTarget(tab.target)
       if (tab.slot === 'secondary' && tab.target === 'tasks') {
@@ -983,7 +993,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     }
     return presentationPolicy.mobileTabs.map((tab) => {
       const resolvedTarget = resolveMobileTarget(tab)
-      const target = resolvedTarget ?? 'workbench'
+      const target = resolvedTarget ?? visibleNavigation[0]?.id ?? 'all-functions'
       return {
         key: tab.slot,
         label: tab.label,
@@ -1012,7 +1022,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       {authMode === 'dev-header' && <label className="context-select account-context"><span>验收账号</span><select value={identity.key} onChange={(event) => changeRole(event.target.value)}>{roleContexts.map((role) => <option value={role.key} key={role.key}>{role.label} · {role.userName}</option>)}</select></label>}
       {!isFullAccountLevel && !!compatibleAssignments.length && <label className="context-select assignment-context"><span>当前任职</span><select value={selectedAssignment?.id ?? ''} onChange={(event) => setSelectedAssignmentId(event.target.value)}>{compatibleAssignments.map((assignment) => <option value={assignment.id} key={assignment.id}>{assignment.positionName} · {assignment.orgName}{assignment.primary ? '（主岗）' : ''}</option>)}</select></label>}
       {isFullAccountLevel && <span className="mobile-current-context">{activeIdentity.label}</span>}
-      <button className="bell" onClick={() => navigate('notifications')} aria-label={unreadCount > 0 ? `消息，${unreadCount}条未读` : '消息'}>消息{unreadCount > 0 && <b>{unreadCount}</b>}</button>
+      {canReadSidebarNotifications && <button className="bell" onClick={() => navigate('notifications')} aria-label={unreadCount > 0 ? `消息，${unreadCount}条未读` : '消息'}>消息{unreadCount > 0 && <b>{unreadCount}</b>}</button>}
       <div className="user"><span>{activeIdentity.userName.slice(-1)}</span><div><strong>{activeIdentity.userName}</strong><small>{activeIdentity.label}</small></div></div>
       {authMode === 'bearer' && <button className="logout-button" onClick={() => setChangingPassword(true)}>修改密码</button>}
       {authMode === 'bearer' && <button className="logout-button" onClick={onLogout}>退出</button>}

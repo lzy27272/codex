@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
+  applyPublishedModuleVisibility,
   applyRoleDefaultsForFallback,
   desktopModuleForRoute,
   isFullAccountPresentationRole,
@@ -25,6 +27,19 @@ const expectedCodes = {
   GROUP_VICE_PRESIDENT: 'GROUP_VICE_PRESIDENT',
   CEO: 'CEO',
   PLATFORM_ADMIN: 'PLATFORM_ADMIN',
+}
+
+function migrationRoleModuleMatrix() {
+  const source = readFileSync(new URL('../../../database/migrations/V37__separate_navigation_modules_from_action_permissions.sql', import.meta.url), 'utf8')
+  const result = new Map()
+  const values = (fragment) => [...fragment.matchAll(/'([^']+)'/g)].map((match) => match[1])
+  const sharedPattern = /FROM unnest\(ARRAY\[(.*?)\]\) AS roles\(role_code\)\s+CROSS JOIN unnest\(ARRAY\[(.*?)\]\) AS modules\(module_id\)/gs
+  for (const match of source.matchAll(sharedPattern)) {
+    for (const roleCode of values(match[1])) result.set(roleCode, values(match[2]))
+  }
+  const singlePattern = /SELECT '([^']+)', module_id\s+FROM unnest\(ARRAY\[(.*?)\]\) AS modules\(module_id\)/gs
+  for (const match of source.matchAll(singlePattern)) result.set(match[1], values(match[2]))
+  return result
 }
 
 test('all persisted Hotel AI OS role codes resolve to the frozen presentation family', () => {
@@ -98,6 +113,17 @@ test('desktop module allowlists match every frozen role template', () => {
   }
   for (const [roleCode, expected] of Object.entries(cases)) {
     assert.deepEqual(resolveRolePresentationPolicy(roleCode).desktopModuleIds, expected, roleCode)
+  }
+})
+
+test('database module grants match every standard frontend role policy', () => {
+  const migrationMatrix = migrationRoleModuleMatrix()
+  for (const roleCode of Object.keys(expectedCodes)) {
+    assert.deepEqual(
+      migrationMatrix.get(roleCode),
+      resolveRolePresentationPolicy(roleCode).desktopModuleIds,
+      roleCode,
+    )
   }
 })
 
@@ -200,6 +226,48 @@ test('published assignment permissions stay authoritative after an administrator
     fullAccountLevel: false,
     assignmentPermissionsPresent: false,
   }), true)
+})
+
+test('published module grants control navigation independently from action permissions', () => {
+  const actionVisible = [
+    { id: 'workbench' },
+    { id: 'hotel-dashboard' },
+    { id: 'operations-dashboard' },
+    { id: 'notifications' },
+  ]
+  assert.deepEqual(
+    applyPublishedModuleVisibility(actionVisible, [
+      'dashboard.hotel',
+      'dashboard.operations',
+      'notification.read',
+      'ui.module.workbench',
+      'ui.module.hotel-dashboard',
+      'ui.module.notifications',
+    ], 'GENERAL_MANAGER').map((item) => item.id),
+    ['workbench', 'hotel-dashboard', 'notifications'],
+  )
+
+  const actionDeniedBeforeModuleFilter = actionVisible.filter((item) => item.id !== 'operations-dashboard')
+  assert.deepEqual(
+    applyPublishedModuleVisibility(actionDeniedBeforeModuleFilter, [
+      'ui.module.operations-dashboard',
+    ], 'OTA_OPERATION_MANAGER'),
+    [],
+  )
+})
+
+test('profiles without explicit module grants use the reviewed compatibility matrix', () => {
+  const actionVisible = [
+    { id: 'workbench' },
+    { id: 'hotel-dashboard' },
+    { id: 'operations-dashboard' },
+    { id: 'notifications' },
+  ]
+  assert.deepEqual(
+    applyPublishedModuleVisibility(actionVisible, ['dashboard.hotel', 'notification.read'], 'GENERAL_MANAGER')
+      .map((item) => item.id),
+    ['workbench', 'hotel-dashboard', 'notifications'],
+  )
 })
 
 test('management roles open team reports even when they also have own-report permission', () => {

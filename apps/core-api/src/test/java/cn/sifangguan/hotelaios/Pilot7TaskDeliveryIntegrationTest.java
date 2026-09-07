@@ -35,6 +35,8 @@ class Pilot7TaskDeliveryIntegrationTest {
     private static final String HOUSEKEEPING_SUPERVISOR = "19000000-0000-0000-0000-000000000004";
     private static final String FRONT_OFFICE_SUPERVISOR = "19000000-0000-0000-0000-000000000005";
     private static final String OTA_ASSISTANT = "19000000-0000-0000-0000-000000000006";
+    private static final String REGIONAL_MANAGER = "19000000-0000-0000-0000-000000000007";
+    private static final String ASSISTANT_GENERAL_MANAGER = "19000000-0000-0000-0000-000000000008";
 
     private static final String GENERAL_MANAGER_ASSIGNMENT = "19200000-0000-0000-0000-000000000001";
     private static final String FRONT_DESK_ASSIGNMENT = "19200000-0000-0000-0000-000000000002";
@@ -246,6 +248,35 @@ class Pilot7TaskDeliveryIntegrationTest {
                         .header("X-Tenant-Id", TENANT)
                         .header("X-Actor-Id", FRONT_OFFICE_SUPERVISOR))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void hotelDiscoveryUsesHotelPermissionWhileRegionalAggregationRemainsSeparate() throws Exception {
+        JsonNode generalManagerHotels = json(getJson("/api/v1/dashboards/hotels", GENERAL_MANAGER));
+        assertThat(generalManagerHotels.path("hotels").size()).isEqualTo(1);
+        assertThat(generalManagerHotels.path("hotels").get(0).path("id").asText())
+                .isEqualTo(HANGZHOU_HOTEL);
+        mockMvc.perform(get("/api/v1/dashboards/operations")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Actor-Id", GENERAL_MANAGER))
+                .andExpect(status().isForbidden());
+
+        JsonNode assistantHotels = json(getJson(
+                "/api/v1/dashboards/hotels", ASSISTANT_GENERAL_MANAGER));
+        assertThat(assistantHotels.path("hotels").size()).isEqualTo(1);
+        assertThat(assistantHotels.path("hotels").get(0).path("id").asText())
+                .isEqualTo(HANGZHOU_HOTEL);
+        mockMvc.perform(get("/api/v1/dashboards/operations")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Actor-Id", ASSISTANT_GENERAL_MANAGER))
+                .andExpect(status().isForbidden());
+
+        JsonNode regionalHotels = json(getJson("/api/v1/dashboards/hotels", REGIONAL_MANAGER));
+        assertThat(regionalHotels.path("hotels").size()).isEqualTo(2);
+        assertThat(regionalHotels.path("hotels").findValuesAsText("id"))
+                .containsExactlyInAnyOrder(HANGZHOU_HOTEL, SHANGHAI_HOTEL);
+        JsonNode operations = json(getJson("/api/v1/dashboards/operations", REGIONAL_MANAGER));
+        assertThat(operations.path("hotels").size()).isEqualTo(2);
     }
 
     @Test

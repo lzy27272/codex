@@ -1,5 +1,7 @@
 import { apiBlob, apiRequest, asList, demoFallbackEnabled, demoOnlyEnabled, type ApiIdentity } from './client'
+import { dashboardApiPaths } from '../app/dashboardContract'
 import type {
+  AccessibleHotels,
   ApiSource,
   DashboardMetric,
   DashboardRisk,
@@ -705,7 +707,7 @@ function normalizeRisk(item: JsonObject, index: number): DashboardRisk {
 export async function loadHotelDashboard(identity: ApiIdentity, hotelId: string) {
   return withFallback(async () => {
     const [dashboardPayload, templatePayload] = await Promise.all([
-      apiRequest<unknown>(`/dashboards/hotels/${hotelId}`, identity),
+      apiRequest<unknown>(dashboardApiPaths.hotel(hotelId), identity),
       apiRequest<unknown>('/templates?type=HOTEL_DASHBOARD', identity).catch(() => []),
     ])
     const raw = object(dashboardPayload)
@@ -736,6 +738,26 @@ export async function loadHotelDashboard(identity: ApiIdentity, hotelId: string)
   }, () => demoValue<HotelDashboard>('demoHotelDashboard'))
 }
 
+export async function loadAccessibleHotels(identity: ApiIdentity) {
+  return withFallback(async () => {
+    const raw = object(await apiRequest<unknown>(dashboardApiPaths.accessibleHotels, identity))
+    return {
+      hotels: asList<JsonObject>(raw.hotels).map((hotel) => ({
+        id: text(hotel, ['id']),
+        code: text(hotel, ['code'], '') || undefined,
+        name: text(hotel, ['name'], '门店'),
+        city: text(hotel, ['city'], '') || undefined,
+        roomCount: value(hotel, 'roomCount', 'room_count') === undefined
+          ? undefined
+          : number(hotel, ['roomCount', 'room_count']),
+      })),
+    } satisfies AccessibleHotels
+  }, async () => {
+    const demoHotel = (await demoValue<HotelDashboard>('demoHotelDashboard')).hotel
+    return { hotels: demoHotel ? [demoHotel] : [] } satisfies AccessibleHotels
+  })
+}
+
 function normalizeOperationsHotel(item: JsonObject): OperationsHotel {
   return {
     id: text(item, ['id']),
@@ -752,7 +774,7 @@ function normalizeOperationsHotel(item: JsonObject): OperationsHotel {
 
 export async function loadOperationsDashboard(identity: ApiIdentity) {
   return withFallback(async () => {
-    const raw = object(await apiRequest<unknown>('/dashboards/operations', identity))
+    const raw = object(await apiRequest<unknown>(dashboardApiPaths.operations, identity))
     return { hotels: asList<JsonObject>(raw.hotels).map(normalizeOperationsHotel) } satisfies OperationsDashboard
   }, () => demoValue<OperationsDashboard>('demoOperationsDashboard'))
 }

@@ -75,6 +75,11 @@ class PositionDefaultProfileMigrationIntegrationTest {
             "kpi.scorecard.review",
             "kpi.scorecard.dispute"
     );
+    private static final Set<String> GENERAL_MANAGER_MODULES = Set.of(
+            "workbench", "hotel-dashboard", "team-work", "tasks",
+            "daily-reports-my", "daily-operations", "kpi-center", "rules",
+            "evaluations", "notifications", "all-functions"
+    );
 
     @Test
     void v35PublishesOnlyUntouchedV33DraftsAndIsSafeToReapply() throws Exception {
@@ -91,7 +96,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
 
             prepareCustomPublishedAndHotelOverrideCases(dataSource);
 
-            assertEquals(2, Flyway.configure()
+            assertEquals(3, Flyway.configure()
                     .dataSource(dataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
@@ -148,7 +153,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
                 assertEquals(0, scalarInt(statement, "SELECT count(*) FROM tenant"));
             }
 
-            assertEquals(2, Flyway.configure()
+            assertEquals(3, Flyway.configure()
                     .dataSource(migrationDataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
@@ -165,6 +170,8 @@ class PositionDefaultProfileMigrationIntegrationTest {
                         "lifecycle_status"));
                 assertEquals(GENERAL_MANAGER_PERMISSIONS,
                         permissionCodes(statement, "GENERAL_MANAGER", 1));
+                assertEquals(GENERAL_MANAGER_MODULES,
+                        moduleIds(statement, "GENERAL_MANAGER", 1));
                 assertEquals(1, automaticPublicationAuditCount(
                         statement, "GENERAL_MANAGER", "V36"));
                 assertEquals(1, scalarInt(statement, """
@@ -378,8 +385,16 @@ class PositionDefaultProfileMigrationIntegrationTest {
                     permissionCodes(statement, "GENERAL_MANAGER", 2));
             assertFalse(permissionCodes(statement, "GENERAL_MANAGER", 1)
                     .contains("dashboard.operations"));
+            assertEquals(GENERAL_MANAGER_MODULES,
+                    moduleIds(statement, "GENERAL_MANAGER", 1));
+            assertFalse(moduleIds(statement, "GENERAL_MANAGER", 1)
+                    .contains("operations-dashboard"));
             assertTrue(permissionCodes(statement, "OTA_OPERATION_MANAGER", 1)
                     .contains("dashboard.operations"));
+            assertTrue(moduleIds(statement, "OTA_OPERATION_MANAGER", 1)
+                    .contains("operations-dashboard"));
+            assertFalse(moduleIds(statement, "OTA_OPERATION_MANAGER", 1)
+                    .contains("hotel-dashboard"));
             assertEquals("PUBLISHED", versionValue(statement, "OTA_OPERATION_MANAGER", 1,
                     "lifecycle_status"));
             assertEquals("DRAFT", versionValue(statement, "OTA_OPERATION_MANAGER", 2,
@@ -493,10 +508,41 @@ class PositionDefaultProfileMigrationIntegrationTest {
                 WHERE item.tenant_id = '%s'::uuid
                   AND position_item.code = '%s'
                   AND version.version_no = %d
+                  AND permission_item.code NOT LIKE 'ui.module.%%'
                 """.formatted(DEMO_TENANT, positionCode, versionNo))) {
             while (resultSet.next()) codes.add(resultSet.getString(1));
         }
         return codes;
+    }
+
+    private static Set<String> moduleIds(
+            Statement statement,
+            String positionCode,
+            int versionNo
+    ) throws Exception {
+        Set<String> modules = new HashSet<>();
+        try (ResultSet resultSet = statement.executeQuery("""
+                SELECT substring(permission_item.code from length('ui.module.') + 1)
+                FROM position_function_profile_permission item
+                JOIN permission permission_item ON permission_item.id = item.permission_id
+                JOIN position_function_profile_version version
+                  ON version.tenant_id = item.tenant_id
+                 AND version.id = item.profile_version_id
+                JOIN position_function_profile profile
+                  ON profile.tenant_id = version.tenant_id
+                 AND profile.id = version.profile_id
+                 AND profile.scope_type = 'GROUP'
+                JOIN position_definition position_item
+                  ON position_item.tenant_id = profile.tenant_id
+                 AND position_item.id = profile.position_id
+                WHERE item.tenant_id = '%s'::uuid
+                  AND position_item.code = '%s'
+                  AND version.version_no = %d
+                  AND permission_item.code LIKE 'ui.module.%%'
+                """.formatted(DEMO_TENANT, positionCode, versionNo))) {
+            while (resultSet.next()) modules.add(resultSet.getString(1));
+        }
+        return modules;
     }
 
     private static String versionCountQuery(String positionCode) {

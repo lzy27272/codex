@@ -348,6 +348,18 @@ export type HotelDashboard = {
   templateSections?: string[]
 }
 
+export type AccessibleHotel = {
+  id: string
+  code?: string
+  name: string
+  city?: string
+  roomCount?: number
+}
+
+export type AccessibleHotels = {
+  hotels: AccessibleHotel[]
+}
+
 export type OperationsHotel = {
   id: string
   name: string

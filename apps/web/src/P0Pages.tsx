@@ -4,6 +4,7 @@ import {
   createCorrectiveTask,
   createWorkRecordEvaluation,
   loadAttachmentContent,
+  loadAccessibleHotels,
   loadHotelDashboard,
   loadOperationsDashboard,
   loadTeamWork,
@@ -236,7 +237,7 @@ function TaskList({ tasks, onSelect }: { tasks: ManagementTask[]; onSelect: (tas
 }
 
 export function HotelDashboardPage({ identity, routeParams, go }: { identity: RoleContext; routeParams: RouteParams; go: Navigate }) {
-  const hotelsResource = useResource(`${identity.key}:dashboard-hotels`, () => loadOperationsDashboard(identity), { hotels: [] })
+  const hotelsResource = useResource(`${identity.key}:dashboard-hotels`, () => loadAccessibleHotels(identity), { hotels: [] })
   const hotels = hotelsResource.data.hotels
   const requestedHotel = hotels.find((hotel) => hotel.id === routeParams.hotelId)
   const assignedHotel = hotels.find((hotel) => hotel.id === identity.assignmentOrgUnitId)

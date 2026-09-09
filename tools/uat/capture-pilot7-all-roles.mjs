@@ -17,7 +17,7 @@ const browserExecutable = process.env.UAT_BROWSER_EXECUTABLE
     'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'].find(existsSync)
 
 const productVersion = 'TECH-V0.2-PILOT.7'
-const databaseTarget = 'V37'
+const databaseTarget = 'V38'
 const authHeaderName = 'x-hotel-ai-authorization'
 const tokenStorageKey = 'hotel-ai-os-access-token'
 const allowedLoginPostPath = '/api/v1/auth/login'
@@ -538,7 +538,7 @@ const report = {
   generatedAt: new Date().toISOString(),
   version: productVersion,
   databaseTarget,
-  profile: 'V37_BROWSER_READ_ONLY',
+  profile: 'V38_BROWSER_READ_ONLY',
   webBase,
   passed,
   summary: {

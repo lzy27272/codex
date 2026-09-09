@@ -21,6 +21,7 @@ apt-get -y install \
   openjdk-21-jre-headless \
   postgresql \
   postgresql-contrib \
+  python3 \
   rsync \
   unzip
 

@@ -2,6 +2,7 @@ package cn.sifangguan.hotelaios.shared.security;
 
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
@@ -16,6 +17,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PositionDefaultProfileMigrationIntegrationTest {
@@ -107,7 +109,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
 
             prepareCustomPublishedAndHotelOverrideCases(dataSource);
 
-            assertEquals(3, Flyway.configure()
+            assertEquals(4, Flyway.configure()
                     .dataSource(dataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
@@ -156,6 +158,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
                 statement.execute("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "
                         + MIGRATION_OWNER);
                 statement.execute("ALTER TABLE tenant OWNER TO " + MIGRATION_OWNER);
+                statement.execute("ALTER TABLE app_role OWNER TO " + MIGRATION_OWNER);
             }
 
             DataSource migrationDataSource = postgres.getDatabase(MIGRATION_OWNER, "postgres");
@@ -164,7 +167,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
                 assertEquals(0, scalarInt(statement, "SELECT count(*) FROM tenant"));
             }
 
-            assertEquals(3, Flyway.configure()
+            assertEquals(4, Flyway.configure()
                     .dataSource(migrationDataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
@@ -189,6 +192,61 @@ class PositionDefaultProfileMigrationIntegrationTest {
                         SELECT CASE WHEN relrowsecurity AND relforcerowsecurity THEN 1 ELSE 0 END
                         FROM pg_class
                         WHERE oid = 'tenant'::regclass
+                        """));
+            }
+        }
+    }
+
+    @Test
+    void v38RejectsReservedCustomRoleForForcedRlsMigrationOwner() throws Exception {
+        try (EmbeddedPostgres postgres = EmbeddedPostgres.builder().start()) {
+            DataSource ownerDataSource = postgres.getPostgresDatabase();
+
+            Flyway.configure()
+                    .dataSource(ownerDataSource)
+                    .locations("classpath:db/migration")
+                    .cleanDisabled(true)
+                    .target("37")
+                    .load()
+                    .migrate();
+
+            try (Connection owner = ownerDataSource.getConnection();
+                 Statement statement = owner.createStatement()) {
+                statement.executeUpdate("""
+                        INSERT INTO app_role (tenant_id, code, name, role_type)
+                        VALUES ('%s'::uuid, ' PLATFORM_ADMIN ', 'Reserved custom role', 'CUSTOM')
+                        """.formatted(DEMO_TENANT));
+                statement.execute("CREATE ROLE " + MIGRATION_OWNER
+                        + " LOGIN PASSWORD 'test-only-password' NOSUPERUSER NOCREATEDB "
+                        + "NOCREATEROLE NOINHERIT NOBYPASSRLS");
+                statement.execute("GRANT USAGE, CREATE ON SCHEMA public TO " + MIGRATION_OWNER);
+                statement.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "
+                        + MIGRATION_OWNER);
+                statement.execute("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "
+                        + MIGRATION_OWNER);
+                statement.execute("ALTER TABLE app_role OWNER TO " + MIGRATION_OWNER);
+            }
+
+            DataSource migrationDataSource = postgres.getDatabase(MIGRATION_OWNER, "postgres");
+            try (Connection migration = migrationDataSource.getConnection();
+                 Statement statement = migration.createStatement()) {
+                assertEquals(0, scalarInt(statement, "SELECT count(*) FROM app_role"),
+                        "FORCE RLS must hide tenant rows when the migration owner has no tenant GUC");
+            }
+
+            assertThrows(FlywayException.class, () -> Flyway.configure()
+                    .dataSource(migrationDataSource)
+                    .locations("classpath:db/migration")
+                    .cleanDisabled(true)
+                    .target("38")
+                    .load()
+                    .migrate());
+
+            try (Connection owner = ownerDataSource.getConnection();
+                 Statement statement = owner.createStatement()) {
+                assertEquals(0, scalarInt(statement, """
+                        SELECT count(*) FROM flyway_schema_history
+                        WHERE version = '38' AND success
                         """));
             }
         }

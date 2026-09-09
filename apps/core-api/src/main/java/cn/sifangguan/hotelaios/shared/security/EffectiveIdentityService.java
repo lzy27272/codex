@@ -24,6 +24,13 @@ public class EffectiveIdentityService {
     );
     private static final Set<String> FULL_ACCOUNT_LEVEL_ROLES = Set.of("PLATFORM_ADMIN", "CEO");
     private static final Set<String> SUPPLEMENTAL_ACCOUNT_ROLES = Set.of("HR_KPI_ADMIN");
+    private static final Set<String> RESERVED_SYSTEM_ROLE_CODES = Set.of(
+            "PLATFORM_ADMIN", "GROUP_ADMIN", "CEO", "GROUP_VICE_PRESIDENT",
+            "GENERAL_MANAGER", "ASSISTANT_GENERAL_MANAGER", "OTA_OPERATION_MANAGER",
+            "OTA_OPERATION_ASSISTANT", "FRONT_OFFICE_SUPERVISOR",
+            "HOUSEKEEPING_SUPERVISOR", "HOUSEKEEPING_ATTENDANT", "FRONT_DESK",
+            "HR_KPI_ADMIN"
+    );
 
     private final NamedParameterJdbcTemplate jdbc;
     private final TenantDatabaseContext databaseContext;
@@ -75,13 +82,12 @@ public class EffectiveIdentityService {
         }
 
         List<RoleGrant> grants = roleGrants(params);
-        Set<String> accountRoles = new LinkedHashSet<>();
-        grants.forEach(grant -> accountRoles.add(grant.roleCode()));
-        boolean fullAccountLevel = accountRoles.stream().anyMatch(FULL_ACCOUNT_LEVEL_ROLES::contains);
+        boolean fullAccountLevel = grants.stream().anyMatch(grant ->
+                grant.systemRole() && FULL_ACCOUNT_LEVEL_ROLES.contains(grant.roleCode()));
 
         List<AssignmentScope> activeAssignments = activeAssignments(params);
         List<RoleGrant> effectiveGrants = grants.stream()
-                .filter(grant -> FULL_ACCOUNT_LEVEL_ROLES.contains(grant.roleCode())
+                .filter(grant -> grant.systemRole() && FULL_ACCOUNT_LEVEL_ROLES.contains(grant.roleCode())
                         || activeAssignments.stream().anyMatch(assignment ->
                         grantSupportsAssignment(tenantId, grant, assignment)))
                 .toList();
@@ -114,7 +120,7 @@ public class EffectiveIdentityService {
 
     private List<RoleGrant> roleGrants(MapSqlParameterSource params) {
         return jdbc.query("""
-                select distinct role.id as role_id, role.code,
+                select distinct role.id as role_id, role.code, role.role_type,
                        assignment.scope_type, assignment.scope_org_unit_id,
                        assignment.source_type, assignment.source_assignment_id
                 from role_assignment assignment
@@ -128,6 +134,7 @@ public class EffectiveIdentityService {
                 """, params, (rs, rowNum) -> new RoleGrant(
                 rs.getObject("role_id", UUID.class),
                 rs.getString("code"),
+                rs.getString("role_type"),
                 rs.getString("scope_type"),
                 rs.getObject("scope_org_unit_id", UUID.class),
                 rs.getString("source_type"),
@@ -138,7 +145,7 @@ public class EffectiveIdentityService {
     private List<AssignmentScope> activeAssignments(MapSqlParameterSource params) {
         return jdbc.query("""
                 select assignment.id, assignment.org_unit_id, assignment.is_primary,
-                       group_profile.default_role_id, role.code as role_code,
+                       group_profile.default_role_id, role.code as role_code, role.role_type,
                        coalesce(hotel_version.id, group_version.id) as effective_version_id,
                        coalesce(hotel_version.authorization_scope_type,
                                 group_version.authorization_scope_type) as authorization_scope_type
@@ -215,6 +222,7 @@ public class EffectiveIdentityService {
                 rs.getBoolean("is_primary"),
                 rs.getObject("default_role_id", UUID.class),
                 rs.getString("role_code"),
+                rs.getString("role_type"),
                 rs.getObject("effective_version_id", UUID.class),
                 rs.getString("authorization_scope_type")
         ));
@@ -232,7 +240,7 @@ public class EffectiveIdentityService {
         Set<UUID> directScopes = new LinkedHashSet<>();
         Set<UUID> treeRoots = new LinkedHashSet<>();
         for (RoleGrant grant : grants) {
-            roles.add(grant.roleCode());
+            roles.add(identityRoleCode(grant.roleCode(), grant.roleType()));
             tenantScope = applyGrantScope(grant, directScopes, treeRoots, tenantScope);
         }
 
@@ -249,7 +257,10 @@ public class EffectiveIdentityService {
                         order by permission.code
                         """, new MapSqlParameterSource("tenantId", tenantId)
                         .addValue("roleIds", roleIds), String.class));
-        if (roles.contains("PLATFORM_ADMIN")) permissions.add("*");
+        if (grants.stream().anyMatch(grant -> grant.systemRole()
+                && "PLATFORM_ADMIN".equals(grant.roleCode()))) {
+            permissions.add("*");
+        }
 
         boolean hasSelfRole = grants.stream().anyMatch(grant -> "SELF".equals(grant.scopeType()));
         if (hasSelfRole) {
@@ -309,10 +320,11 @@ public class EffectiveIdentityService {
             }
         }
         Set<String> roles = new LinkedHashSet<>();
-        roles.add(selected.roleCode());
+        String selectedRoleCode = identityRoleCode(selected.roleCode(), selected.roleType());
+        roles.add(selectedRoleCode);
         for (RoleGrant grant : grants) {
-            if (!SUPPLEMENTAL_ACCOUNT_ROLES.contains(grant.roleCode())) continue;
-            roles.add(grant.roleCode());
+            if (!grant.systemRole() || !SUPPLEMENTAL_ACCOUNT_ROLES.contains(grant.roleCode())) continue;
+            roles.add(identityRoleCode(grant.roleCode(), grant.roleType()));
             permissions.addAll(rolePermissions(tenantId, grant.roleId()));
             tenantScope = applyGrantScope(grant, directScopes, treeRoots, tenantScope);
         }
@@ -320,7 +332,7 @@ public class EffectiveIdentityService {
         return new TenantPrincipal(
                 tenantId,
                 accountId,
-                selected.roleCode(),
+                selectedRoleCode,
                 roles,
                 permissions,
                 scopes,
@@ -352,7 +364,7 @@ public class EffectiveIdentityService {
             RoleGrant grant,
             AssignmentScope assignment
     ) {
-        if (!SUPPLEMENTAL_ACCOUNT_ROLES.contains(grant.roleCode())
+        if (!(grant.systemRole() && SUPPLEMENTAL_ACCOUNT_ROLES.contains(grant.roleCode()))
                 && !grant.roleId().equals(assignment.roleId())) {
             return false;
         }
@@ -472,6 +484,13 @@ public class EffectiveIdentityService {
         return index < 0 ? ROLE_PRIORITY.size() : index;
     }
 
+    static String identityRoleCode(String roleCode, String roleType) {
+        if (RESERVED_SYSTEM_ROLE_CODES.contains(roleCode) && !"SYSTEM".equals(roleType)) {
+            return "CUSTOM";
+        }
+        return roleCode;
+    }
+
     private static <T> void addIfPresent(Set<T> target, T value) {
         if (value != null) target.add(value);
     }
@@ -479,11 +498,15 @@ public class EffectiveIdentityService {
     private record RoleGrant(
             UUID roleId,
             String roleCode,
+            String roleType,
             String scopeType,
             UUID scopeOrgUnitId,
             String sourceType,
             UUID sourceAssignmentId
     ) {
+        private boolean systemRole() {
+            return "SYSTEM".equals(roleType);
+        }
     }
 
     private record AssignmentScope(
@@ -492,6 +515,7 @@ public class EffectiveIdentityService {
             boolean primary,
             UUID roleId,
             String roleCode,
+            String roleType,
             UUID effectiveVersionId,
             String authorizationScopeType
     ) {

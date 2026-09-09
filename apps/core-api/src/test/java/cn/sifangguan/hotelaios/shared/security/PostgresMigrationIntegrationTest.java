@@ -50,14 +50,59 @@ class PostgresMigrationIntegrationTest {
                     .dataSource(ownerDataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
+                    .target("37")
                     .load()
                     .migrate()
                     .migrationsExecuted;
 
-            assertEquals(37, migrations);
+            String rolePermissionsAtV37;
+            String profilePermissionsAtV37;
+            String rolesAtV37;
+            String roleAssignmentsAtV37;
+            try (Connection connection = ownerDataSource.getConnection();
+                 Statement statement = connection.createStatement()) {
+                rolePermissionsAtV37 = rolePermissionFingerprint(statement);
+                profilePermissionsAtV37 = profilePermissionFingerprint(statement);
+                rolesAtV37 = appRoleFingerprint(statement);
+                roleAssignmentsAtV37 = roleAssignmentFingerprint(statement);
+            }
+
+            migrations += Flyway.configure()
+                    .dataSource(ownerDataSource)
+                    .locations("classpath:db/migration")
+                    .cleanDisabled(true)
+                    .load()
+                    .migrate()
+                    .migrationsExecuted;
+
+            assertEquals(38, migrations);
 
             try (Connection owner = ownerDataSource.getConnection();
                  Statement statement = owner.createStatement()) {
+                assertEquals(rolePermissionsAtV37, rolePermissionFingerprint(statement),
+                        "V38 must not change role permissions");
+                assertEquals(profilePermissionsAtV37, profilePermissionFingerprint(statement),
+                        "V38 must not change published position profile permissions");
+                assertEquals(rolesAtV37, appRoleFingerprint(statement),
+                        "V38 must not change role records");
+                assertEquals(roleAssignmentsAtV37, roleAssignmentFingerprint(statement),
+                        "V38 must not change role assignments");
+                assertEquals(2, scalarInt(statement, """
+                        SELECT count(*)
+                        FROM pg_constraint
+                        WHERE conrelid = 'app_role'::regclass
+                          AND conname IN ('ck_app_role_type_governance',
+                                         'ck_app_role_custom_reserved_code')
+                          AND convalidated
+                        """));
+                assertThrows(SQLException.class, () -> statement.executeUpdate("""
+                        INSERT INTO app_role (tenant_id, code, name, role_type)
+                        VALUES ('%s'::uuid, 'INVALID-ROLE-TYPE', 'Invalid role', 'OTHER')
+                        """.formatted(DEMO_TENANT)));
+                assertThrows(SQLException.class, () -> statement.executeUpdate("""
+                        INSERT INTO app_role (tenant_id, code, name, role_type)
+                        VALUES ('%s'::uuid, ' PLATFORM_ADMIN ', 'Impersonated role', 'CUSTOM')
+                        """.formatted(DEMO_TENANT)));
                 for (String table : REQUIRED_DAILY_OPERATIONS_TABLES) {
                     assertEquals(1, scalarInt(statement, """
                             SELECT count(*) FROM information_schema.tables
@@ -558,6 +603,54 @@ class PostgresMigrationIntegrationTest {
                 WHERE grant_item.tenant_id = '%s'::uuid AND role.code = '%s'
                   AND permission_item.code LIKE 'wecom-binding.%%'
                 """.formatted(DEMO_TENANT, roleCode));
+    }
+
+    private static String rolePermissionFingerprint(Statement statement) throws Exception {
+        return scalarString(statement, """
+                SELECT md5(coalesce(string_agg(
+                    tenant_id::text || ':' || role_id::text || ':' || permission_id::text,
+                    '|' ORDER BY tenant_id, role_id, permission_id
+                ), ''))
+                FROM role_permission
+                """);
+    }
+
+    private static String profilePermissionFingerprint(Statement statement) throws Exception {
+        return scalarString(statement, """
+                SELECT md5(coalesce(string_agg(
+                    tenant_id::text || ':' || profile_version_id::text || ':' || permission_id::text,
+                    '|' ORDER BY tenant_id, profile_version_id, permission_id
+                ), ''))
+                FROM position_function_profile_permission
+                """);
+    }
+
+    private static String appRoleFingerprint(Statement statement) throws Exception {
+        return scalarString(statement, """
+                SELECT md5(coalesce(string_agg(
+                    to_jsonb(role_row)::text,
+                    '|' ORDER BY role_row.tenant_id, role_row.id
+                ), ''))
+                FROM (
+                    SELECT id, tenant_id, code, name, role_type, created_at, updated_at
+                    FROM app_role
+                ) role_row
+                """);
+    }
+
+    private static String roleAssignmentFingerprint(Statement statement) throws Exception {
+        return scalarString(statement, """
+                SELECT md5(coalesce(string_agg(
+                    to_jsonb(assignment_row)::text,
+                    '|' ORDER BY assignment_row.tenant_id, assignment_row.id
+                ), ''))
+                FROM (
+                    SELECT id, tenant_id, account_id, role_id, scope_org_unit_id,
+                           scope_type, valid_from, valid_to, granted_by, created_at,
+                           source_type, source_assignment_id
+                    FROM role_assignment
+                ) assignment_row
+                """);
     }
 
     private static boolean scalarBoolean(Statement statement, String sql) throws Exception {

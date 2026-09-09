@@ -13,6 +13,7 @@ React + TypeScript + Vite 前端。TECH-V0.2 默认读取真实 `/api/v1`，覆�
 P0页面依赖以下后端契约：
 
 ```text
+GET    /api/v1/dashboards/hotels
 GET    /api/v1/dashboards/hotels/{hotelId}
 GET    /api/v1/dashboards/operations
 GET    /api/v1/work-expectations/{expectationId}
@@ -25,6 +26,8 @@ DELETE /api/v1/work-data/records/{recordId}/attachments/{attachmentId}
 POST   /api/v1/standard-evaluations
 POST   /api/v1/tasks
 ```
+
+门店列表和单店驾驶舱均要求`dashboard.hotel`；多门店经营驾驶舱单独要求`dashboard.operations`，两项权限互不替代。
 
 工作包详情必须返回精确的 `standardVersionId`；页面不会猜测“最新标准”。任务创建使用原工作记录的责任任职作为负责人、当前主管任职作为验收人。附件上传假设后端完成对象存储落盘、大小/类型校验和扫描状态维护。
 

@@ -1,30 +1,55 @@
 package cn.sifangguan.hotelaios.iam;
 
+import cn.sifangguan.hotelaios.shared.audit.AuditWriter;
 import cn.sifangguan.hotelaios.shared.context.TenantPrincipal;
 import cn.sifangguan.hotelaios.shared.db.TenantDatabaseContext;
+import cn.sifangguan.hotelaios.shared.security.AccessDeniedException;
 import cn.sifangguan.hotelaios.shared.security.AccessPolicy;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class IamService {
+    private static final Set<String> RESERVED_SYSTEM_ROLE_CODES = Set.of(
+            "PLATFORM_ADMIN", "GROUP_ADMIN", "CEO", "GROUP_VICE_PRESIDENT",
+            "GENERAL_MANAGER", "ASSISTANT_GENERAL_MANAGER", "OTA_OPERATION_MANAGER",
+            "OTA_OPERATION_ASSISTANT", "FRONT_OFFICE_SUPERVISOR",
+            "HOUSEKEEPING_SUPERVISOR", "HOUSEKEEPING_ATTENDANT", "FRONT_DESK",
+            "HR_KPI_ADMIN"
+    );
+    private static final Set<String> ROLE_SCOPE_TYPES = Set.of("SELF", "ORG_UNIT", "ORG_TREE", "TENANT");
+
     private final NamedParameterJdbcTemplate jdbc;
     private final TenantDatabaseContext databaseContext;
     private final AccessPolicy accessPolicy;
+    private final AuditWriter auditWriter;
+    private final ObjectMapper objectMapper;
 
-    public IamService(NamedParameterJdbcTemplate jdbc, TenantDatabaseContext databaseContext, AccessPolicy accessPolicy) {
+    public IamService(
+            NamedParameterJdbcTemplate jdbc,
+            TenantDatabaseContext databaseContext,
+            AccessPolicy accessPolicy,
+            AuditWriter auditWriter,
+            ObjectMapper objectMapper
+    ) {
         this.jdbc = jdbc;
         this.databaseContext = databaseContext;
         this.accessPolicy = accessPolicy;
+        this.auditWriter = auditWriter;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional(readOnly = true)
@@ -153,6 +178,7 @@ public class IamService {
         TenantPrincipal principal = prepare();
         return jdbc.queryForList("""
                 select r.id, r.code, r.name, r.role_type,
+                       (r.role_type = 'CUSTOM') as editable,
                        count(rp.permission_id) as permission_count
                 from app_role r
                 left join role_permission rp on rp.tenant_id = r.tenant_id and rp.role_id = r.id
@@ -166,34 +192,58 @@ public class IamService {
     public Map<String, Object> createRole(IamModels.CreateRole request) {
         accessPolicy.requirePermission("iam.manage");
         TenantPrincipal principal = prepare();
+        String code = request.code().trim().toUpperCase(Locale.ROOT);
+        String name = request.name().trim();
+        String roleType = normalizeCustomRoleType(request.roleType());
+        if (RESERVED_SYSTEM_ROLE_CODES.contains(code)) {
+            throw new IllegalArgumentException("系统角色代码不可用于自定义角色");
+        }
         UUID id = UUID.randomUUID();
         MapSqlParameterSource params = base(principal)
                 .addValue("id", id)
-                .addValue("code", request.code().trim().toUpperCase())
-                .addValue("name", request.name().trim())
-                .addValue("roleType", request.roleType() == null ? "CUSTOM" : request.roleType().toUpperCase());
+                .addValue("code", code)
+                .addValue("name", name)
+                .addValue("roleType", roleType);
         jdbc.update("""
                 insert into app_role (id, tenant_id, code, name, role_type)
                 values (:id, :tenantId, :code, :name, :roleType)
                 """, params);
-        return Map.of("id", id, "code", request.code(), "name", request.name());
+        auditWriter.record("IAM_CUSTOM_ROLE_CREATED", "APP_ROLE", id, json(Map.of(
+                "roleId", id,
+                "roleCode", code,
+                "roleName", name,
+                "roleType", roleType
+        )));
+        return Map.of("id", id, "code", code, "name", name, "roleType", roleType);
     }
 
     @Transactional
     public void setPermissions(UUID roleId, IamModels.SetPermissions request) {
         accessPolicy.requirePermission("iam.manage");
         TenantPrincipal principal = prepare();
-        requireOwned("app_role", principal, roleId);
+        RoleLock role = lockCustomRole(principal, roleId);
+        Set<UUID> permissionIds = validatePermissionIds(request.permissionIds());
+        List<String> beforePermissionCodes = permissionCodes(principal, roleId);
         jdbc.update("delete from role_permission where tenant_id = :tenantId and role_id = :roleId",
                 base(principal).addValue("roleId", roleId));
-        for (UUID permissionId : request.permissionIds()) {
+        for (UUID permissionId : permissionIds) {
             jdbc.update("""
                     insert into role_permission (tenant_id, role_id, permission_id)
-                    select :tenantId, :roleId, p.id from permission p where p.id = :permissionId
+                    values (:tenantId, :roleId, :permissionId)
                     """, base(principal)
                     .addValue("roleId", roleId)
                     .addValue("permissionId", permissionId));
         }
+        List<String> afterPermissionCodes = permissionCodes(principal, roleId);
+        auditWriter.record("IAM_CUSTOM_ROLE_PERMISSIONS_REPLACED", "APP_ROLE", roleId, json(Map.of(
+                "roleId", roleId,
+                "roleCode", role.code(),
+                "roleType", role.roleType(),
+                "beforePermissionCodes", beforePermissionCodes,
+                "afterPermissionCodes", afterPermissionCodes,
+                "beforePermissionCount", beforePermissionCodes.size(),
+                "afterPermissionCount", afterPermissionCodes.size()
+        )));
     }
 
     @Transactional
@@ -201,10 +251,26 @@ public class IamService {
         accessPolicy.requirePermission("iam.manage");
         TenantPrincipal principal = prepare();
         requireOwned("user_account", principal, request.accountId());
-        requireOwned("app_role", principal, request.roleId());
+        RoleLock role = lockCustomRole(principal, request.roleId());
         if (request.scopeOrgUnitId() != null) {
             requireOwned("org_unit", principal, request.scopeOrgUnitId());
             accessPolicy.requireOrgScope(request.scopeOrgUnitId());
+        }
+        String scopeType = request.scopeType().trim().toUpperCase(Locale.ROOT);
+        if (!ROLE_SCOPE_TYPES.contains(scopeType)) {
+            throw new IllegalArgumentException("不支持的数据范围类型");
+        }
+        if (("ORG_UNIT".equals(scopeType) || "ORG_TREE".equals(scopeType))
+                && request.scopeOrgUnitId() == null) {
+            throw new IllegalArgumentException("组织范围授权必须指定组织");
+        }
+        if (("SELF".equals(scopeType) || "TENANT".equals(scopeType))
+                && request.scopeOrgUnitId() != null) {
+            throw new IllegalArgumentException("SELF或TENANT授权不能指定组织");
+        }
+        OffsetDateTime validFrom = request.validFrom() == null ? OffsetDateTime.now() : request.validFrom();
+        if (request.validTo() != null && request.validTo().isBefore(validFrom)) {
+            throw new IllegalArgumentException("授权结束时间不能早于开始时间");
         }
         UUID id = UUID.randomUUID();
         MapSqlParameterSource params = base(principal)
@@ -212,8 +278,8 @@ public class IamService {
                 .addValue("accountId", request.accountId())
                 .addValue("roleId", request.roleId())
                 .addValue("scopeOrgUnitId", request.scopeOrgUnitId())
-                .addValue("scopeType", request.scopeType().toUpperCase())
-                .addValue("validFrom", request.validFrom() == null ? OffsetDateTime.now() : request.validFrom())
+                .addValue("scopeType", scopeType)
+                .addValue("validFrom", validFrom)
                 .addValue("validTo", request.validTo())
                 .addValue("grantedBy", principal.actorId());
         jdbc.update("""
@@ -224,7 +290,92 @@ public class IamService {
                     (:id, :tenantId, :accountId, :roleId, :scopeOrgUnitId, :scopeType,
                      :validFrom, :validTo, :grantedBy)
                 """, params);
+        Map<String, Object> audit = new LinkedHashMap<>();
+        audit.put("assignmentId", id);
+        audit.put("accountId", request.accountId());
+        audit.put("roleId", role.id());
+        audit.put("roleCode", role.code());
+        audit.put("roleType", role.roleType());
+        audit.put("scopeType", scopeType);
+        if (request.scopeOrgUnitId() != null) {
+            audit.put("scopeOrgUnitId", request.scopeOrgUnitId());
+        }
+        audit.put("validFrom", validFrom);
+        if (request.validTo() != null) {
+            audit.put("validTo", request.validTo());
+        }
+        auditWriter.record("IAM_CUSTOM_ROLE_GRANTED", "ROLE_ASSIGNMENT", id, json(audit));
         return Map.of("id", id, "accountId", request.accountId(), "roleId", request.roleId());
+    }
+
+    private String normalizeCustomRoleType(String requestedRoleType) {
+        if (requestedRoleType == null || requestedRoleType.isBlank()) {
+            return "CUSTOM";
+        }
+        String normalized = requestedRoleType.trim().toUpperCase(Locale.ROOT);
+        if (!"CUSTOM".equals(normalized)) {
+            throw new IllegalArgumentException("通用IAM只能创建CUSTOM角色");
+        }
+        return normalized;
+    }
+
+    private RoleLock lockCustomRole(TenantPrincipal principal, UUID roleId) {
+        List<RoleLock> roles = jdbc.query("""
+                select id, code, role_type
+                from app_role
+                where tenant_id = :tenantId and id = :roleId
+                for update
+                """, base(principal).addValue("roleId", roleId), (rs, rowNum) -> new RoleLock(
+                rs.getObject("id", UUID.class),
+                rs.getString("code"),
+                rs.getString("role_type")
+        ));
+        if (roles.isEmpty()) {
+            throw new IllegalArgumentException("资源不存在或不属于当前租户");
+        }
+        RoleLock role = roles.getFirst();
+        if (!"CUSTOM".equals(role.roleType())) {
+            throw new AccessDeniedException("SYSTEM角色只能通过已发布岗位方案或受控迁移维护");
+        }
+        return role;
+    }
+
+    private Set<UUID> validatePermissionIds(List<UUID> requestedPermissionIds) {
+        if (requestedPermissionIds == null || requestedPermissionIds.isEmpty()
+                || requestedPermissionIds.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalArgumentException("权限列表不能为空且不能包含空值");
+        }
+        Set<UUID> permissionIds = new LinkedHashSet<>(requestedPermissionIds);
+        if (permissionIds.size() != requestedPermissionIds.size()) {
+            throw new IllegalArgumentException("权限列表不能包含重复项");
+        }
+        Integer existingCount = jdbc.queryForObject(
+                "select count(*) from permission where id in (:permissionIds)",
+                new MapSqlParameterSource("permissionIds", permissionIds),
+                Integer.class
+        );
+        if (existingCount == null || existingCount != permissionIds.size()) {
+            throw new IllegalArgumentException("权限不存在");
+        }
+        return permissionIds;
+    }
+
+    private List<String> permissionCodes(TenantPrincipal principal, UUID roleId) {
+        return jdbc.queryForList("""
+                select permission.code
+                from role_permission grant_item
+                join permission on permission.id = grant_item.permission_id
+                where grant_item.tenant_id = :tenantId and grant_item.role_id = :roleId
+                order by permission.code
+                """, base(principal).addValue("roleId", roleId), String.class);
+    }
+
+    private String json(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("无法生成审计数据", exception);
+        }
     }
 
     private TenantPrincipal prepare() {
@@ -451,5 +602,8 @@ public class IamService {
     private record AssignmentFunctionProfile(
             Set<String> permissionCodes, String authorizationScopeType, boolean wecomSelfSelectable
     ) {
+    }
+
+    private record RoleLock(UUID id, String code, String roleType) {
     }
 }

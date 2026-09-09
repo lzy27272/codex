@@ -21,10 +21,13 @@ required_files = [
     "database/migrations/V1__sprint1_foundation.sql",
     "database/migrations/V2__tenant_row_level_security.sql",
     "database/migrations/V3__sprint1_demo_seed.sql",
+    "database/migrations/V38__protect_system_role_governance.sql",
     "docs/openapi.yaml",
     "docs/TEST-REPORT.md",
     "apps/core-api/pom.xml",
     "apps/web/src/App.tsx",
+    "infra/production/health/health-check.sh",
+    "infra/production/health/health-check.test.sh",
     "apps/web/prototype/index.html",
     "docs/sprint1-ceo-dashboard.png",
     "docs/sprint1-standard-center.png",
@@ -37,6 +40,12 @@ schema = (ROOT / "database/migrations/V1__sprint1_foundation.sql").read_text(enc
 rls = (ROOT / "database/migrations/V2__tenant_row_level_security.sql").read_text(encoding="utf-8")
 seed = (ROOT / "database/migrations/V3__sprint1_demo_seed.sql").read_text(encoding="utf-8")
 openapi = (ROOT / "docs/openapi.yaml").read_text(encoding="utf-8")
+iam_service = (ROOT / "apps/core-api/src/main/java/cn/sifangguan/hotelaios/iam/IamService.java").read_text(encoding="utf-8")
+effective_identity_service = (ROOT / "apps/core-api/src/main/java/cn/sifangguan/hotelaios/shared/security/EffectiveIdentityService.java").read_text(encoding="utf-8")
+v38_migration = (ROOT / "database/migrations/V38__protect_system_role_governance.sql").read_text(encoding="utf-8")
+health_check = (ROOT / "infra/production/health/health-check.sh").read_text(encoding="utf-8")
+health_check_test = (ROOT / "infra/production/health/health-check.test.sh").read_text(encoding="utf-8")
+runtime_install = (ROOT / "infra/production/bootstrap/20-install-runtime.sh").read_text(encoding="utf-8")
 
 required_tables = {
     "tenant", "brand", "org_unit", "org_unit_closure", "hotel_profile",
@@ -95,9 +104,97 @@ controller_paths = {
     "/api/v1/iam/roles", "/api/v1/standards", "/api/v1/work-data/forms",
     "/api/v1/work-data/records", "/api/v1/metrics/definitions",
     "/api/v1/metrics/observations", "/api/v1/dashboards/ceo",
+    "/api/v1/dashboards/hotels", "/api/v1/dashboards/hotels/{hotelId}",
+    "/api/v1/dashboards/operations",
 }
 check("OpenAPI 覆盖核心端点", all(f"  {path}:" in openapi for path in controller_paths))
 check("OpenAPI 3.1 声明", openapi.startswith("openapi: 3.1.0"))
+
+
+def openapi_path_block(path: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(path)}:\n(.*?)(?=^  /api/v1/|^components:|\Z)",
+        openapi,
+        flags=re.M | re.S,
+    )
+    return match.group(1) if match else ""
+
+
+hotel_discovery_contract = openapi_path_block("/api/v1/dashboards/hotels")
+operations_dashboard_contract = openapi_path_block("/api/v1/dashboards/operations")
+check(
+    "OpenAPI 门店发现权限与响应精确",
+    bool(re.search(r"Requires\s+dashboard[.]hotel", hotel_discovery_contract))
+    and "#/components/schemas/AccessibleHotels" in hotel_discovery_contract,
+)
+check(
+    "OpenAPI 区域驾驶舱使用独立权限",
+    bool(re.search(r"Requires\s+dashboard[.]operations", operations_dashboard_contract))
+    and not re.search(r"Requires\s+dashboard[.]hotel", operations_dashboard_contract),
+)
+check(
+    "OpenAPI 通用IAM仅接受CUSTOM角色",
+    bool(re.search(
+        r"CreateRole:\s+type: object.*?roleType:\s+type: \[string, 'null'\]"
+        r"\s+enum: \[CUSTOM, null\]",
+        openapi,
+        flags=re.S,
+    )),
+)
+check(
+    "生产健康检查从当前JAR推导Flyway版本与校验和",
+    "read_packaged_flyway_state" in health_check
+    and "BOOT-INF/classes/db/migration/V([1-9][0-9]*)__" in health_check
+    and "zlib.crc32" in health_check
+    and bool(re.search(r"^\s*python3\s*\\$", runtime_install, flags=re.M))
+    and "'22|true'" not in health_check,
+)
+check(
+    "生产健康检查拒绝失败历史、缺失迁移与校验和漂移",
+    "count(*) filter (where success = false)" in health_check
+    and "validate_flyway_database_state" in health_check
+    and 'test "${database_migrations}" != "${expected_state}"' in health_check
+    and "checksum::text" in health_check,
+)
+check(
+    "生产健康检查具备完整历史门禁负向测试",
+    all(marker in health_check_test for marker in [
+        "missing intermediate migration is rejected",
+        "database ahead is rejected",
+        "checksum drift is rejected",
+        "failed history row is rejected",
+        "duplicate packaged version is rejected",
+        "invalid packaged version name is rejected",
+    ]),
+)
+java_reserved_block = re.search(
+    r"RESERVED_SYSTEM_ROLE_CODES\s*=\s*Set[.]of\((.*?)\);",
+    iam_service,
+    flags=re.S,
+)
+identity_reserved_block = re.search(
+    r"RESERVED_SYSTEM_ROLE_CODES\s*=\s*Set[.]of\((.*?)\);",
+    effective_identity_service,
+    flags=re.S,
+)
+sql_reserved_block = re.search(
+    r"role_type\s*=\s*'CUSTOM'.*?upper\(btrim\(code\)\)\s+IN\s*\((.*?)\)",
+    v38_migration,
+    flags=re.S | re.I,
+)
+java_reserved_codes = set(re.findall(r'"([A-Z][A-Z0-9_]*)"', java_reserved_block.group(1))) \
+    if java_reserved_block else set()
+identity_reserved_codes = set(re.findall(r'"([A-Z][A-Z0-9_]*)"', identity_reserved_block.group(1))) \
+    if identity_reserved_block else set()
+sql_reserved_codes = set(re.findall(r"'([A-Z][A-Z0-9_]*)'", sql_reserved_block.group(1))) \
+    if sql_reserved_block else set()
+check(
+    "IAM、有效身份与V38系统角色保留代码一致",
+    bool(java_reserved_codes)
+    and java_reserved_codes == identity_reserved_codes == sql_reserved_codes,
+    "iam_vs_identity=" + ",".join(sorted(java_reserved_codes ^ identity_reserved_codes))
+    + "; iam_vs_sql=" + ",".join(sorted(java_reserved_codes ^ sql_reserved_codes)),
+)
 try:
     ET.parse(ROOT / "apps/core-api/pom.xml")
     pom_valid = True

@@ -24,7 +24,7 @@
 - 本店有效员工和已发布标准。
 - Sprint 2 风险事件和任务位置预留。
 
-数据接口：`GET /api/v1/dashboards/hotels/{hotelId}`。
+数据接口：`GET /api/v1/dashboards/hotels`用于当前授权范围的门店发现，`GET /api/v1/dashboards/hotels/{hotelId}`用于单店驾驶舱；两者均要求`dashboard.hotel`。
 
 ## 2. 组织与权限
 

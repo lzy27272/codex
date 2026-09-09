@@ -205,7 +205,11 @@ paths:
     post:
       tags: [IAM]
       operationId: createRole
-      summary: Create a tenant role
+      summary: Create a tenant-managed CUSTOM role
+      description: >-
+        Generic IAM can create CUSTOM roles only. SYSTEM roles are maintained by
+        published position profiles or controlled database migrations. A successful
+        creation is written to the append-only audit log.
       requestBody:
         required: true
         content:
@@ -213,11 +217,16 @@ paths:
             schema: { $ref: '#/components/schemas/CreateRole' }
       responses:
         '201': { $ref: '#/components/responses/ObjectResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
   /api/v1/iam/roles/{roleId}/permissions:
     put:
       tags: [IAM]
       operationId: replaceRolePermissions
-      summary: Replace a role permission set
+      summary: Replace a CUSTOM role permission set
+      description: >-
+        Replaces the complete permission set of a tenant-owned CUSTOM role and writes
+        the before/after permission codes to the append-only audit log. SYSTEM roles
+        cannot be changed through generic IAM.
       parameters:
         - $ref: '#/components/parameters/RoleId'
       requestBody:
@@ -227,11 +236,17 @@ paths:
             schema: { $ref: '#/components/schemas/SetRolePermissions' }
       responses:
         '204': { description: Permissions replaced }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/iam/role-assignments:
     post:
       tags: [IAM]
       operationId: grantRole
-      summary: Grant a time-bounded role within an organization scope
+      summary: Grant a time-bounded CUSTOM role within an organization scope
+      description: >-
+        Generic IAM grants tenant-managed CUSTOM roles only and records the change in
+        the append-only audit log. SYSTEM roles are assigned through published position
+        profiles or controlled provisioning.
       requestBody:
         required: true
         content:
@@ -239,6 +254,8 @@ paths:
             schema: { $ref: '#/components/schemas/GrantRole' }
       responses:
         '201': { $ref: '#/components/responses/ObjectResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/standards/categories:
     get:
       tags: [Standard Center]
@@ -1220,6 +1237,21 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/ObjectResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/dashboards/hotels:
+    get:
+      tags: [Dashboard]
+      operationId: listAccessibleDashboardHotels
+      summary: List active hotels available to the hotel dashboard
+      description: >-
+        Returns only active hotels visible through the caller's tenant or organization
+        scope. Requires dashboard.hotel and does not grant regional operations access.
+      responses:
+        '200':
+          description: Scope-filtered active hotel list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessibleHotels' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/dashboards/hotels/{hotelId}:
     get:
       tags: [Dashboard]
@@ -1246,7 +1278,8 @@ paths:
       description: >-
         Returns only hotels visible through the caller's tenant or organization-tree
         scopes. Per-hotel counts cover open tasks, overdue tasks, failed evaluations,
-        MISSED work expectations and today's work submissions. Requires dashboard.hotel.
+        MISSED work expectations and today's work submissions. Requires
+        dashboard.operations.
       responses:
         '200':
           description: Scope-filtered multi-hotel operating and risk summary
@@ -1396,6 +1429,11 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
     Forbidden:
       description: Permission denied or organization scope violation
       content:
@@ -1506,7 +1544,11 @@ components:
       properties:
         code: { type: string }
         name: { type: string }
-        roleType: { type: [string, 'null'] }
+        roleType:
+          type: [string, 'null']
+          enum: [CUSTOM, null]
+          default: CUSTOM
+          description: Omit or send null for CUSTOM; SYSTEM is not accepted by generic IAM.
     SetRolePermissions:
       type: object
       required: [permissionIds]
@@ -2010,6 +2052,22 @@ components:
         name: { type: string }
         city: { type: [string, 'null'] }
         room_count: { type: [integer, 'null'], minimum: 0 }
+    AccessibleHotel:
+      type: object
+      required: [id, code, name]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        city: { type: [string, 'null'] }
+        room_count: { type: [integer, 'null'], minimum: 0 }
+    AccessibleHotels:
+      type: object
+      required: [hotels]
+      properties:
+        hotels:
+          type: array
+          items: { $ref: '#/components/schemas/AccessibleHotel' }
     DashboardMetric:
       type: object
       required: [code, name, unit, business_date, value]

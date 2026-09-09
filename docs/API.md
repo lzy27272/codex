@@ -57,7 +57,10 @@
 - `POST /api/v1/tasks`：`reviewerAssignmentId`可省略并由服务端确定安全验收人；`creatorAssignmentId`记录发起任职；`dispatchNow=true`时创建、派发、通知和审计在同一事务提交。
 - 任务读取范围与下发目标范围独立计算：跨店下发能力不会扩大`team/all`读取范围；读取始终服从账号的有效角色授权范围。
 - 未绑定标准的临时任务可由指定验收人在`RESULT_SUBMITTED`直接`APPROVE`或`REJECT`并写入审计；绑定标准的任务仍禁止绕过标准评价。
-- `GET /api/v1/dashboards/operations`与`GET /api/v1/dashboards/hotels/{hotelId}`：CEO可选择租户内门店；店内主管只可访问其所属门店，跨门店仍拒绝。
+- `GET /api/v1/dashboards/hotels`：要求`dashboard.hotel`，只返回当前租户和组织范围内可进入门店驾驶舱的活动门店；不授予区域经营驾驶舱权限。
+- `GET /api/v1/dashboards/hotels/{hotelId}`：要求`dashboard.hotel`；CEO可选择租户内门店，店内主管只可访问其所属门店，跨门店仍拒绝。
+- `GET /api/v1/dashboards/operations`：要求独立的`dashboard.operations`，只返回当前租户和组织范围内的多门店经营数据。
+- 通用IAM只创建、修改和授予`CUSTOM`角色，并为创建、权限整组替换和授予写入追加式审计；`SYSTEM`角色只能由已发布岗位方案、受控初始化或数据库迁移维护。
 
 主数据维护继续使用API-V1向后兼容边界。`PUT`负责资料和`ACTIVE/INACTIVE`生命周期；`DELETE`只接受已停用且没有业务引用的数据。已存在任职、授权、工作或任务历史时返回400并要求保留停用记录，禁止级联删除历史。所有写操作要求`org.manage`，并继续执行租户和组织范围检查。
 
@@ -68,6 +71,7 @@
 - `POST /api/v1/work-expectations/sla/process?limit=100`：将到期未交期望标记为 `MISSED`，返回 `processedCount`、`batchLimit`、`expectationIds`和 `processedAt`，并产生 `WorkExpectationMissed` 事件。
 - `POST /api/v1/tasks/sla/process`：返回 `overdueTasks`、`escalations`、`cancelledEscalations`和 `notifications`，用于核对逾期提醒与升级执行。
 - `GET /api/v1/dashboards/hotels/{hotelId}`：新增 `risks`、`incompleteTasks`、`openTaskCount`、`overdueTaskCount`和 `missedWorkCount`。
+- `GET /api/v1/dashboards/hotels`：按服务端租户和组织范围返回门店选择列表，要求`dashboard.hotel`。
 - `GET /api/v1/dashboards/operations`：按服务端组织范围返回可见门店及各店未完成任务、逾期任务、失败评价、漏交和当日提交计数。
 
 ## 管理闭环

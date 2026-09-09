@@ -33,7 +33,7 @@ class OrganizationMaintenanceIntegrationTest {
     private static final String CEO = "19000000-0000-0000-0000-000000000001";
     private static final String FRONT_DESK = "19000000-0000-0000-0000-000000000003";
     private static final String HOTEL = "12000000-0000-0000-0000-000000000003";
-    private static final String FRONT_DESK_ROLE = "19400000-0000-0000-0000-000000000003";
+    private static final String FRONT_OFFICE_SUPERVISOR_POSITION = "14000000-0000-0000-0000-000000000003";
 
     private static final EmbeddedPostgres POSTGRES = startPostgres();
     private static final DataSource DATA_SOURCE = POSTGRES.getPostgresDatabase();
@@ -123,9 +123,13 @@ class OrganizationMaintenanceIntegrationTest {
         UUID assignmentId = UUID.fromString(json(postJson("/api/v1/org/employees/" + employeeId + "/assignments", CEO, """
                 {"orgUnitId":"%s","positionId":"%s","primary":true,"assignmentType":"PERMANENT","validFrom":"2026-07-19"}
                 """.formatted(orgId, positionId))).path("id").asText());
-        postJson("/api/v1/iam/role-assignments", CEO, """
-                {"accountId":"%s","roleId":"%s","scopeOrgUnitId":"%s","scopeType":"ORG_TREE"}
-                """.formatted(accountId, FRONT_DESK_ROLE, orgId));
+        // SYSTEM role grants are produced only through published positions.
+        // Use the published ORG_UNIT-scoped supervisor position so org
+        // deactivation still verifies closure of a SYSTEM role grant.
+        JsonNode standardAssignment = json(postJson("/api/v1/org/employees/" + employeeId + "/assignments", CEO, """
+                {"orgUnitId":"%s","positionId":"%s","primary":false,"assignmentType":"PERMANENT","validFrom":"2026-07-19"}
+                """.formatted(orgId, FRONT_OFFICE_SUPERVISOR_POSITION)));
+        UUID standardRoleAssignmentId = UUID.fromString(standardAssignment.path("roleAssignmentId").asText());
 
         putJson("/api/v1/org/units/" + orgId, CEO, """
                 {"code":"HIS-ORG-%s","name":"历史测试部门","sortOrder":99,"status":"INACTIVE"}
@@ -133,7 +137,7 @@ class OrganizationMaintenanceIntegrationTest {
 
         assertThat(jdbc.queryForObject("select status from employee_position_assignment where id = ?", String.class, assignmentId))
                 .isEqualTo("INACTIVE");
-        assertThat(jdbc.queryForObject("select valid_to is not null from role_assignment where account_id = ? and scope_org_unit_id = ?", Boolean.class, accountId, orgId))
+        assertThat(jdbc.queryForObject("select valid_to is not null from role_assignment where id = ?", Boolean.class, standardRoleAssignmentId))
                 .isTrue();
         deleteJson("/api/v1/org/units/" + orgId, CEO, 400);
 
@@ -150,7 +154,7 @@ class OrganizationMaintenanceIntegrationTest {
         )).isTrue();
         assertThat(jdbc.queryForObject(
                 "select count(*) from employee_position_assignment where employee_id = ?", Integer.class, employeeId
-        )).isOne();
+        )).isEqualTo(2);
 
         postJson("/api/v1/org/employees/" + employeeId + "/restore", CEO, "{}");
         assertThat(jdbc.queryForObject(

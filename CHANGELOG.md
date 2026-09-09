@@ -26,6 +26,17 @@
 
 ### Added
 
+#### CHG-20260909-048：收紧系统角色治理并修复发布契约与健康门禁
+
+- 日期：2026-09-09。
+- 状态：Unreleased / LOCAL CANDIDATE / FORMAL RELEASE STATUS UNCHANGED / NOT DEPLOYED。
+- 角色治理：通用IAM只允许创建、配置和授予`CUSTOM`角色；`SYSTEM`角色继续由已发布岗位方案或受控迁移维护。CUSTOM角色的创建、权限精确替换和授权均写入审计，角色列表明确返回是否可编辑。
+- 数据库：新增Flyway V38约束，拒绝非规范`role_type`和冒用保留系统角色代码的CUSTOM角色；迁移不修改现有角色、角色授权、角色权限或已发布岗位权限，保留V37已经恢复的标准管理岗位工作闭环。
+- 身份安全：有效身份只有在`role_type=SYSTEM`时才赋予平台管理员、集团管理员、CEO和人事KPI管理员的特殊角色语义，阻止历史伪造CUSTOM角色代码形成权限旁路。
+- API契约：补齐`GET /api/v1/dashboards/hotels`，修正区域驾驶舱需要`dashboard.operations`，并将通用IAM的`roleType`请求契约收窄为可省略的`CUSTOM`。
+- 发布门禁：生产健康检查从当前发布JAR逐项计算全部数字Flyway迁移的兼容CRC32，并与数据库成功历史的版本和checksum精确比对；缺失、中间断档、数据库超前、checksum漂移、失败或非法历史均拒绝，同时拒绝当前软链接与实际运行进程目录不一致。
+- 验证：最终快照后端全量回归220项通过（0失败、0错误、3跳过），Web契约测试53/53通过，Pilot前端构建通过，静态发布门禁32/32通过；构建JAR包含V1至V38共38项迁移，JAR内完整迁移状态与Flyway 11.7.2校验结果一致。当前Windows环境无可用Bash，`health-check.test.sh`的Ubuntu实机执行及真实`flyway_schema_history`交叉验证保留为部署前置门禁，尚未宣称完成。
+
 #### CHG-20260907-047：修复内部 Pilot 导航布局、门店驾驶舱取数与岗位模块治理
 
 - 日期：2026-09-07。

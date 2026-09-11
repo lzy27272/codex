@@ -5,7 +5,9 @@ resolve_packaged_flyway_version() {
   local jar_listing="${1-}"
   local valid_versions
 
-  valid_versions="$(resolve_packaged_flyway_versions "${jar_listing}")"
+  if ! valid_versions="$(resolve_packaged_flyway_versions "${jar_listing}")"; then
+    return 1
+  fi
   printf '%s\n' "$(printf '%s\n' "${valid_versions}" | tail -n 1)"
 }
 

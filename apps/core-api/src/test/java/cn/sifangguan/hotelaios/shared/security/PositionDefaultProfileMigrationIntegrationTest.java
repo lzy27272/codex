@@ -113,6 +113,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
                     .dataSource(dataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
+                    .target("38")
                     .load()
                     .migrate()
                     .migrationsExecuted);
@@ -171,6 +172,7 @@ class PositionDefaultProfileMigrationIntegrationTest {
                     .dataSource(migrationDataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
+                    .target("38")
                     .load()
                     .migrate()
                     .migrationsExecuted);

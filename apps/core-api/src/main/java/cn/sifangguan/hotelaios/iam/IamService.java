@@ -3,6 +3,7 @@ package cn.sifangguan.hotelaios.iam;
 import cn.sifangguan.hotelaios.shared.audit.AuditWriter;
 import cn.sifangguan.hotelaios.shared.context.TenantPrincipal;
 import cn.sifangguan.hotelaios.shared.db.TenantDatabaseContext;
+import cn.sifangguan.hotelaios.shared.features.GroupManagementFeatureGate;
 import cn.sifangguan.hotelaios.shared.security.AccessDeniedException;
 import cn.sifangguan.hotelaios.shared.security.AccessPolicy;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -25,6 +26,7 @@ import java.util.UUID;
 public class IamService {
     private static final Set<String> RESERVED_SYSTEM_ROLE_CODES = Set.of(
             "PLATFORM_ADMIN", "GROUP_ADMIN", "CEO", "GROUP_VICE_PRESIDENT",
+            "GROUP_CHAIRMAN", "HR_ADMINISTRATION_SUPERVISOR", "HR_ADMINISTRATION",
             "GENERAL_MANAGER", "ASSISTANT_GENERAL_MANAGER", "OTA_OPERATION_MANAGER",
             "OTA_OPERATION_ASSISTANT", "FRONT_OFFICE_SUPERVISOR",
             "HOUSEKEEPING_SUPERVISOR", "HOUSEKEEPING_ATTENDANT", "FRONT_DESK",
@@ -37,19 +39,22 @@ public class IamService {
     private final AccessPolicy accessPolicy;
     private final AuditWriter auditWriter;
     private final ObjectMapper objectMapper;
+    private final GroupManagementFeatureGate groupManagementFeatureGate;
 
     public IamService(
             NamedParameterJdbcTemplate jdbc,
             TenantDatabaseContext databaseContext,
             AccessPolicy accessPolicy,
             AuditWriter auditWriter,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            GroupManagementFeatureGate groupManagementFeatureGate
     ) {
         this.jdbc = jdbc;
         this.databaseContext = databaseContext;
         this.accessPolicy = accessPolicy;
         this.auditWriter = auditWriter;
         this.objectMapper = objectMapper;
+        this.groupManagementFeatureGate = groupManagementFeatureGate;
     }
 
     @Transactional(readOnly = true)
@@ -161,7 +166,12 @@ public class IamService {
                 principal.permissions(),
                 principal.hasTenantScope(),
                 principal.orgScopes(),
-                assignments
+                assignments,
+                principal.businessActorAssignmentId(),
+                new IamModels.Capabilities(new IamModels.GroupManagementCapabilities(
+                        groupManagementFeatureGate.workPlansEnabled(principal.tenantId()),
+                        groupManagementFeatureGate.executiveTasksEnabled(principal.tenantId())
+                ))
         );
     }
 

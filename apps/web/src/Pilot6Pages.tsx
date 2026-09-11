@@ -9,6 +9,7 @@ import {
 } from './api/resources'
 import { WorkPackageCenter } from './ConfigurationPages'
 import type { EnterpriseTemplate, EnterpriseTemplateType, RoleContext } from './domain'
+import { product } from './product'
 
 type Row = Record<string, unknown>
 type AssignmentOption = { id: string; employeeName: string; positionName: string; levelCode?: string; orgUnitId: string; orgName: string; hotelId?: string; hotelName?: string }
@@ -19,7 +20,7 @@ const text = (row: Row, ...keys: string[]) => String(field(row, ...keys) ?? '')
 
 function Modal({ title, children, onClose, footer }: { title: string; children: React.ReactNode; onClose: () => void; footer: React.ReactNode }) {
   return <div className="modal-backdrop"><section className="modal configuration-modal pilot6-editor" role="dialog" aria-modal="true">
-    <header><div><span className="panel-kicker">TECH-V0.2-PILOT.7</span><h2>{title}</h2></div><button className="close" onClick={onClose}>×</button></header>
+    <header><div><span className="panel-kicker">{product.version}</span><h2>{title}</h2></div><button className="close" onClick={onClose}>×</button></header>
     <div className="form-body configuration-form">{children}</div><footer>{footer}</footer>
   </section></div>
 }
@@ -167,7 +168,7 @@ export function TaskCreateDialog({ identity, onClose, onCreated }: { identity: R
         orgUnitId: selectedAssignee.hotelId ?? selectedAssignee.orgUnitId,
         assigneeAssignmentId: form.assigneeAssignmentId,
         reviewerAssignmentId: form.reviewerAssignmentId || null,
-        creatorAssignmentId: identity.assignmentId ?? null,
+        creatorAssignmentId: identity.businessActorAssignmentId ?? null,
         dispatchNow: true,
         standardVersionId: form.standardVersionId || null,
         workRecordId: null, title: form.title.trim(), description: form.description || null,

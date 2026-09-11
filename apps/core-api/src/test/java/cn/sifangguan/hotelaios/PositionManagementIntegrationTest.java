@@ -333,7 +333,7 @@ class PositionManagementIntegrationTest {
         assertThat(jdbc.queryForObject(
                 "select valid_to is null from role_assignment where id = ?", Boolean.class, manualGrant
         )).isTrue();
-        getAsWithAssignment("/api/v1/iam/me", FRONT_ACCOUNT, assignmentId.toString(), 401);
+        getAsWithAssignment("/api/v1/iam/me", FRONT_ACCOUNT, assignmentId.toString(), 403);
     }
 
     @Test
@@ -359,7 +359,7 @@ class PositionManagementIntegrationTest {
                 where tenant_id = ?::uuid and source_type = 'POSITION_ASSIGNMENT'
                   and source_assignment_id = ?
                 """, Boolean.class, TENANT, assignmentId)).isTrue();
-        getAsWithAssignment("/api/v1/iam/me", FRONT_ACCOUNT, assignmentId.toString(), 401);
+        getAsWithAssignment("/api/v1/iam/me", FRONT_ACCOUNT, assignmentId.toString(), 403);
     }
 
     @Test
@@ -376,7 +376,7 @@ class PositionManagementIntegrationTest {
                 .andExpect(jsonPath("$.permissions[?(@ == 'work-record.submit')]").isNotEmpty());
 
         getAsWithAssignment("/api/v1/iam/me", FRONT_SUPERVISOR_ACCOUNT,
-                "19200000-0000-0000-0000-000000000002", 401);
+                "19200000-0000-0000-0000-000000000002", 403);
         getAsWithAssignment("/api/v1/iam/me", FRONT_SUPERVISOR_ACCOUNT,
                 "not-a-uuid", 400)
                 .andExpect(jsonPath("$.detail").value("X-Assignment-Id不是有效UUID"));

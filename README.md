@@ -1,6 +1,6 @@
 # Hotel AI OS
 
-酒店集团第二管理体系。当前产品基线为PRODUCT-V1.2；TECH-V0.1已发布。TECH-V0.2已完成RC Final本地业务收口，并完成RC3安全加固：六角色、三业务闭环、正式JWT路径、真实后台Worker、附件安全扫描、数据库密码外部必填、Live宿主干净停机、可复现构建和数据库恢复演练均有证据；但正式签署、目标企业SSO、真实现场照片与目标附件链、有效Git标签以及目标环境运维保障仍未完成，因此TECH-V0.2保持Unreleased。Sprint 3预实施计划已输出，但仍待TECH-V0.2正式发布和TECH-V0.3技术冻结，尚未启动编码。
+酒店集团第二管理体系。当前产品基线为PRODUCT-V1.4；集团身份、岗位关系、董事长受限交办与周/月工作计划已完成DESIGN-1.1和TECH-DESIGN-1.0正式冻结，目标为TECH-V0.2-PILOT.8。批次A、B已完成本地编码和验证：集团管理身份底座与董事长仅向集团总经理/副总经理交办的专用闭环已实现，但全部功能开关仍关闭，未迁移运行库、未映射真实人员、未部署；周/月工作计划与提醒批次C、D尚未开始。TECH-V0.1已发布。TECH-V0.2已完成RC Final本地业务收口，并完成RC3安全加固：六角色、三业务闭环、正式JWT路径、真实后台Worker、附件安全扫描、数据库密码外部必填、Live宿主干净停机、可复现构建和数据库恢复演练均有证据；但正式签署、目标企业SSO、真实现场照片与目标附件链、有效Git标签以及目标环境运维保障仍未完成，因此TECH-V0.2保持Unreleased。Sprint 3预实施计划已输出，但仍待TECH-V0.2正式发布和TECH-V0.3技术冻结，尚未启动编码。
 
 当前可供门店开展受控内部业务测试的版本为`TECH-V0.2-PILOT.7`，产品名称“贵州四方馆酒店管理有限公司中台”，公网地址为https://www.sfgzt.cn。该Pilot已接入本机真实PostgreSQL和真实应用账号，支持可点击工作台与驾驶舱、原子任务投递、多角色数据隔离、15秒任务/通知自动刷新、任务图片证据和有/无标准验收。8个真实角色登录与下达入口回归、真实账号API闭环和公网UI任务闭环均已通过。操作说明见`docs/PILOT-TEST-USER-GUIDE.md`，本轮报告见`docs/TECH-V0.2-PILOT.7-REPAIR-REPORT.md`。Pilot可用不改变TECH-V0.2正式版仍为Unreleased的发布判断。
 
@@ -25,7 +25,7 @@
 - 未完成闭环：工作期望MISSED检测、提醒、规则建任务、任务OVERDUE和升级。
 - 驾驶舱：店总门店风险/未完成任务汇总和区域多门店运营视图。
 
-当前Pilot数据库迁移已达Flyway V17。V16增加结构化工作提交、任务证据和版本化企业模板；V17补齐OTA运营助理任务下达/验收权限。租户业务表继续启用并强制RLS。当前Pilot OpenAPI为`0.2.4-pilot.7`（OpenAPI 3.1.0，81路径、67模型），API主版本仍为`/api/v1`，本轮无破坏性主版本变更。正式判断见`docs/TECH-V0.2-RELEASE-CANDIDATE-FINAL-REPORT.md`。
+当前仓库代码基线包含Flyway V1—V38；V37分离导航模块与页面动作权限，V38加固SYSTEM/CUSTOM角色代码治理。租户业务表继续启用并强制RLS。当前Pilot OpenAPI为`0.2.4-pilot.7`（OpenAPI 3.1.0，81路径、67模型），API主版本仍为`/api/v1`，本轮无破坏性主版本变更。正式判断见`docs/TECH-V0.2-RELEASE-CANDIDATE-FINAL-REPORT.md`。
 
 RC3本地加固运行移除了发布JAR中的数据库密码回退值，并在应用入口增加缺失密钥预检；48项后端测试零失败，真实Live UAT宿主1/1通过并确认Hikari先于PostgreSQL关闭；两次独立构建的5项制品指纹一致，深度敏感信息扫描覆盖160个文件和43,830个归档条目，0命中、0错误。无密钥启动在0.2秒内失败，未创建Spring上下文、未尝试数据库连接、未监听端口。该结果关闭本地代码级问题，但制品仍未绑定Git提交，不能替代正式发布门禁。
 
@@ -92,6 +92,17 @@ TECH-V0.3技术冻结草案见`docs/TECH-V0.3-TECHNICAL-FREEZE-DRAFT.md`。草�
 4. PRODUCT、TECH、API和DB版本分别编号，禁止只写无法判断含义的裸版本号。
 5. 尚未开发的能力只能标记“规划中”，不得写成已完成。
 6. 已发布记录采用追加式维护，不覆盖历史结论。
+
+## PRODUCT-V1.4集团管理与工作计划冻结
+
+- 当前架构冻结：`docs/V1.4-ARCHITECTURE-FREEZE.md`
+- 当前业务设计冻结：`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-DESIGN-FREEZE.md`
+- 正式技术冻结：`docs/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-TECHNICAL-FREEZE.md`
+- 实施计划：`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-IMPLEMENTATION-PLAN.md`
+- 历史技术草案：`docs/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-TECHNICAL-FREEZE-DRAFT.md`
+- 历史冻结：`docs/V1.3-ARCHITECTURE-FREEZE.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1-DESIGN-FREEZE.md`
+- 状态：PRODUCT-V1.4 / DESIGN-1.1 / TECH-DESIGN-1.0已冻结；实施批次已就绪，编码、数据库迁移、API变更和部署均未开始。
+- 关键口径：集团总经理与集团CEO同岗；区域经理暂不启用；行政人事和行政人事主管均直属总经理、副总为间接领导；董事长无管理后台权限且只可向总经理/副总经理交办任务；总经理以下显式授权管理岗提交周/月计划，由精确直属主管逐项批准后生成提交岗位任务。
 
 ## 独立 OTA 自动化项目
 

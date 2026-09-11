@@ -56,10 +56,16 @@ test('reviewed aliases resolve without fuzzy role inference', () => {
   assert.equal(resolveRolePresentationPolicy('客房主管').key, 'SUPERVISOR')
   assert.equal(resolveRolePresentationPolicy('店助').key, 'ASSISTANT_MANAGER')
   assert.equal(resolveRolePresentationPolicy('店长').key, 'HOTEL_MANAGER')
-  assert.equal(resolveRolePresentationPolicy('区域/运营经理').key, 'REGIONAL_OPERATIONS')
-  assert.equal(resolveRolePresentationPolicy('人事').key, 'HR')
+  assert.equal(resolveRolePresentationPolicy('OTA运营经理').key, 'REGIONAL_OPERATIONS')
+  assert.equal(resolveRolePresentationPolicy('区域/运营经理').key, 'GENERIC')
+  assert.equal(resolveRolePresentationPolicy('区域经理').key, 'GENERIC')
+  assert.equal(resolveRolePresentationPolicy('人事').key, 'GENERIC')
+  assert.equal(resolveRolePresentationPolicy('行政人事').key, 'HR_ADMINISTRATION')
+  assert.equal(resolveRolePresentationPolicy('行政人事主管').key, 'HR_ADMINISTRATION_SUPERVISOR')
+  assert.equal(resolveRolePresentationPolicy('集团董事长').key, 'GROUP_CHAIRMAN')
   assert.equal(resolveRolePresentationPolicy('集团副总').key, 'GROUP_VICE_PRESIDENT')
   assert.equal(resolveRolePresentationPolicy('集团CEO').key, 'CEO')
+  assert.equal(resolveRolePresentationPolicy('集团总经理').key, 'CEO')
   assert.equal(resolveRolePresentationPolicy('GROUP_ADMIN').key, 'PLATFORM_ADMIN')
 })
 
@@ -82,6 +88,7 @@ test('mobile five-tab labels and targets match the frozen role matrix', () => {
     OTA_OPERATION_MANAGER: [['区域', 'operations-dashboard'], ['待办', 'tasks'], ['运营', 'daily-operations'], ['消息', 'notifications'], ['我的', 'all-functions']],
     HR_KPI_ADMIN: [['人事', 'organization'], ['待办', 'tasks'], ['KPI', 'kpi-center'], ['消息', 'notifications'], ['我的', 'all-functions']],
     GROUP_VICE_PRESIDENT: [['集团', 'workbench'], ['待办', 'tasks'], ['经营', 'daily-operations'], ['消息', 'notifications'], ['我的', 'all-functions']],
+    GROUP_CHAIRMAN: [['集团', 'workbench'], ['任务', 'tasks'], ['经营', 'daily-operations'], ['消息', 'notifications'], ['我的', 'account-self-service']],
     CEO: [['集团', 'workbench'], ['决策', 'investments'], ['经营', 'daily-operations'], ['消息', 'notifications'], ['我的', 'all-functions']],
     PLATFORM_ADMIN: [['平台', 'workbench'], ['待办', 'tasks'], ['配置', 'organization'], ['消息', 'notifications'], ['我的', 'all-functions']],
   }
@@ -108,6 +115,7 @@ test('desktop module allowlists match every frozen role template', () => {
     OTA_OPERATION_MANAGER: ['workbench', 'operations-dashboard', 'tasks', 'daily-reports-my', 'daily-operations', 'kpi-center', 'rules', 'notifications', 'all-functions'],
     HR_KPI_ADMIN: ['workbench', 'tasks', 'organization', 'wecom-bindings', 'wecom-onboarding', 'kpi-center', 'notifications', 'all-functions'],
     GROUP_VICE_PRESIDENT: ['workbench', 'operations-dashboard', 'tasks', 'daily-reports-my', 'daily-operations', 'kpi-center', 'work-packages', 'rules', 'notifications', 'all-functions'],
+    GROUP_CHAIRMAN: ['workbench', 'hotel-dashboard', 'operations-dashboard', 'team-work', 'tasks', 'daily-reports-my', 'daily-operations', 'evaluations', 'notifications'],
     CEO: ['workbench', 'hotel-dashboard', 'operations-dashboard', 'investments', 'work-packages', 'team-work', 'tasks', 'daily-reports-my', 'daily-report-templates', 'daily-operations', 'kpi-center', 'rules', 'evaluations', 'templates', 'organization', 'wecom-bindings', 'wecom-onboarding', 'notifications', 'all-functions'],
     PLATFORM_ADMIN: ['workbench', 'hotel-dashboard', 'operations-dashboard', 'investments', 'work-packages', 'my-work', 'team-work', 'tasks', 'daily-reports-my', 'daily-report-templates', 'daily-operations', 'kpi-center', 'rules', 'evaluations', 'templates', 'organization', 'wecom-webhooks', 'wecom-bindings', 'wecom-onboarding', 'notifications', 'all-functions'],
   }

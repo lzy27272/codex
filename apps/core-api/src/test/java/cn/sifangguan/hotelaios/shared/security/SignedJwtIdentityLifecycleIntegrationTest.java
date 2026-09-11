@@ -151,10 +151,32 @@ class SignedJwtIdentityLifecycleIntegrationTest {
     }
 
     @Test
+    void ordinaryAccountKeepsBootstrapActorEmptyAndHonorsExplicitAssignmentSelection() throws Exception {
+        String token = OIDC.sign(FRONT_OFFICE_SUPERVISOR);
+
+        mockMvc.perform(get("/api/v1/iam/me")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.businessActorAssignmentId").doesNotExist())
+                .andExpect(jsonPath("$.positionAssignments[?(@.id == '" + FRONT_OFFICE_PRIMARY_ASSIGNMENT + "')]")
+                        .isNotEmpty());
+
+        mockMvc.perform(get("/api/v1/iam/me")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Assignment-Id", FRONT_OFFICE_SECONDARY_ASSIGNMENT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.businessActorAssignmentId").value(FRONT_OFFICE_SECONDARY_ASSIGNMENT));
+    }
+
+    @Test
     void tenantAccountWithoutEmployeeRecordRemainsAuthenticated() throws Exception {
         String token = OIDC.sign(CEO);
         assertStillUnexpired(token);
-        getMe(token, 200);
+        mockMvc.perform(get("/api/v1/iam/me")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.businessActorAssignmentId").doesNotExist())
+                .andExpect(jsonPath("$.tenantScope").value(true));
     }
 
     @Test
@@ -165,7 +187,8 @@ class SignedJwtIdentityLifecycleIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .header("X-Assignment-Id", "not-a-uuid"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("X-Assignment-Id不是有效UUID"));
+                .andExpect(jsonPath("$.detail").value("X-Assignment-Id不是有效UUID"))
+                .andExpect(jsonPath("$.code").value("BUSINESS_ASSIGNMENT_INVALID_FORMAT"));
     }
 
     private void getMe(String token, int expectedStatus) throws Exception {

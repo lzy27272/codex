@@ -3,6 +3,7 @@ import type { ApiIdentity } from './api/client'
 export type ViewId =
   | 'workbench'
   | 'all-functions'
+  | 'account-self-service'
   | 'hotel-dashboard'
   | 'operations-dashboard'
   | 'work-packages'
@@ -56,6 +57,13 @@ export type IdentitySnapshot = {
   tenantScope: boolean
   orgScopes: string[]
   assignments: IdentityAssignment[]
+  businessActorAssignmentId?: string
+  capabilities: {
+    groupManagement: {
+      workPlansEnabled: boolean
+      executiveTasksEnabled: boolean
+    }
+  }
 }
 
 export type WorkPackage = {
@@ -239,6 +247,7 @@ export type ManagementTask = {
   reviewerName: string
   targetOrgName: string
   sourceType: string
+  creationSource?: string
   sourceTitle?: string
   description?: string
   dueAt?: string

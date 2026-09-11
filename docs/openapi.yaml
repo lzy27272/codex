@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: Hotel AI OS Core API
-  version: 0.2.4-pilot.7
+  version: 0.2.5-pilot.8
   description: >-
-    PRODUCT-V1.2 / TECH-V0.2 Sprint 2.1 UAT-candidate contract. Production requests use a
+    PRODUCT-V1.4 / TECH-V0.2-PILOT.8 contract. Production requests use a
     trusted JWT/SSO bearer token; roles, permissions, organization scope and
     active position assignments are resolved by the server. X-Tenant-Id and
     X-Actor-Id are accepted only when DEV_HEADER_AUTH_ENABLED=true for local
@@ -23,6 +23,7 @@ tags:
   - name: Work Data
   - name: Rule Engine
   - name: Task Center
+  - name: Group Executive Task
   - name: Evaluation
   - name: Notification
   - name: Metrics
@@ -181,6 +182,8 @@ paths:
       tags: [IAM]
       operationId: getCurrentIdentity
       summary: Resolve the current account, roles, permissions, scopes and assignments
+      parameters:
+        - $ref: '#/components/parameters/AssignmentHeader'
       responses:
         '200':
           description: Effective server-side identity
@@ -1110,6 +1113,125 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TaskSlaProcessResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/executive-tasks:
+    get:
+      tags: [Group Executive Task]
+      operationId: listExecutiveTasks
+      summary: List the chairman's field-minimized group task projection
+      description: Requires an active GROUP_CHAIRMAN business assignment, executive-task.read and the tenant feature gate. The list never returns descriptions, result text, reminders or evidence metadata.
+      parameters:
+        - $ref: '#/components/parameters/AssignmentHeader'
+      responses:
+        '200':
+          description: Field-minimized group task list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ExecutiveTaskSummary' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Group Executive Task]
+      operationId: createExecutiveTask
+      summary: Atomically assign a task to a group general manager or vice president
+      description: Idempotency-Key must be the canonical UUID text in clientCommandId. Reviewer, source and organization fields are server-derived and rejected if supplied.
+      parameters:
+        - $ref: '#/components/parameters/AssignmentHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateExecutiveTask' }
+      responses:
+        '201':
+          description: Task created and dispatched to PENDING_ACK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutiveTaskDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/executive-tasks/targets:
+    get:
+      tags: [Group Executive Task]
+      operationId: listExecutiveTaskTargets
+      summary: List active group-root GM and vice-president assignments eligible for chairman assignment
+      parameters:
+        - $ref: '#/components/parameters/AssignmentHeader'
+      responses:
+        '200':
+          description: Eligible target assignments
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ExecutiveTaskTarget' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /api/v1/executive-tasks/{taskId}:
+    get:
+      tags: [Group Executive Task]
+      operationId: getExecutiveTask
+      summary: Get a field-minimized task detail
+      description: Description, result summary, evidence count and reminder times are present only for the current chairman assignment's authoritative directive. Evidence metadata and content are never returned.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/AssignmentHeader'
+      responses:
+        '200':
+          description: Field-minimized task detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutiveTaskDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /api/v1/executive-tasks/{taskId}/actions/approve:
+    post:
+      tags: [Group Executive Task]
+      operationId: approveExecutiveTask
+      summary: Approve the current chairman assignment's own authoritative directive
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/AssignmentHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveExecutiveTask' }
+      responses:
+        '200':
+          description: Approved task
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutiveTaskDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/executive-tasks/{taskId}/actions/rework:
+    post:
+      tags: [Group Executive Task]
+      operationId: reworkExecutiveTask
+      summary: Return the current chairman assignment's own authoritative directive for rework
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/AssignmentHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReworkExecutiveTask' }
+      responses:
+        '200':
+          description: Task returned for rework
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutiveTaskDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/v1/standard-evaluations:
     get:
       tags: [Evaluation]
@@ -1405,7 +1527,15 @@ components:
       in: header
       required: true
       description: Client-generated key; reuse returns the original semantic result.
-      schema: { type: string, minLength: 1, maxLength: 255 }
+      schema: { type: string, minLength: 1, maxLength: 200 }
+    AssignmentHeader:
+      name: X-Assignment-Id
+      in: header
+      required: false
+      description: >-
+        Selects the current responsibility-bearing business actor assignment without
+        replacing or narrowing account-level roles and permissions.
+      schema: { type: string, format: uuid }
   responses:
     ListResponse:
       description: List response
@@ -1447,13 +1577,17 @@ components:
   schemas:
     Problem:
       type: object
+      required: [title, status, detail, code]
       properties:
         title: { type: string }
         status: { type: integer }
         detail: { type: string }
+        code:
+          type: string
+          enum: [AUTHENTICATION_FAILED, BUSINESS_ASSIGNMENT_REQUIRED, BUSINESS_ASSIGNMENT_INVALID_FORMAT, BUSINESS_ASSIGNMENT_FORBIDDEN, BUSINESS_ACTOR_MISMATCH, BUSINESS_ASSIGNMENT_ROLE_MISMATCH, ACCESS_DENIED, REQUEST_INVALID, RESOURCE_NOT_FOUND, FEATURE_NOT_ENABLED, EXECUTIVE_TASK_TARGET_FORBIDDEN, EXECUTIVE_TASK_ACTION_FORBIDDEN, TASK_VERSION_CONFLICT, TASK_STATE_CONFLICT, IDEMPOTENCY_STATE_UNAVAILABLE, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_IN_PROGRESS, IDEMPOTENCY_STATE_CONFLICT]
     EffectiveIdentity:
       type: object
-      required: [tenantId, account, roles, permissions, tenantScope, organizationScopes, positionAssignments]
+      required: [tenantId, account, roles, permissions, tenantScope, organizationScopes, positionAssignments, capabilities]
       properties:
         tenantId: { type: string, format: uuid }
         account: { type: object, additionalProperties: true }
@@ -1463,7 +1597,40 @@ components:
         permissions: { type: array, uniqueItems: true, items: { type: string } }
         tenantScope: { type: boolean }
         organizationScopes: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
-        positionAssignments: { type: array, items: { type: object, additionalProperties: true } }
+        positionAssignments: { type: array, items: { $ref: '#/components/schemas/PositionAssignment' } }
+        businessActorAssignmentId: { type: [string, 'null'], format: uuid }
+        capabilities: { $ref: '#/components/schemas/IdentityCapabilities' }
+    PositionAssignment:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, organizationCode, organizationName, positionId, positionCode, positionName, primary, assignmentType, validFrom, permissionCodes, authorizationScopeType, wecomSelfSelectable]
+      properties:
+        id: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        organizationCode: { type: string }
+        organizationName: { type: string }
+        positionId: { type: string, format: uuid }
+        positionCode: { type: string }
+        positionName: { type: string }
+        primary: { type: boolean }
+        assignmentType: { type: string, enum: [PERMANENT, TEMPORARY, ACTING] }
+        validFrom: { type: string, format: date }
+        validTo: { type: [string, 'null'], format: date }
+        permissionCodes: { type: array, uniqueItems: true, items: { type: string } }
+        authorizationScopeType: { type: string, enum: [SELF, ORG_UNIT, ORG_TREE, TENANT] }
+        wecomSelfSelectable: { type: boolean }
+    IdentityCapabilities:
+      type: object
+      additionalProperties: false
+      required: [groupManagement]
+      properties:
+        groupManagement:
+          type: object
+          additionalProperties: false
+          required: [workPlansEnabled, executiveTasksEnabled]
+          properties:
+            workPlansEnabled: { type: boolean }
+            executiveTasksEnabled: { type: boolean }
     CreateOrgUnit:
       type: object
       required: [code, name, unitType]
@@ -1932,6 +2099,75 @@ components:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         actorAssignmentId: { type: [string, 'null'], format: uuid }
         payload: { type: [object, 'null'], additionalProperties: true }
+    ExecutiveTaskTarget:
+      type: object
+      additionalProperties: false
+      required: [assignmentId, employeeName, positionCode, positionName, organizationId, organizationName]
+      properties:
+        assignmentId: { type: string, format: uuid }
+        employeeName: { type: string }
+        positionCode: { type: string, enum: [GROUP_GENERAL_MANAGER, GROUP_VICE_PRESIDENT] }
+        positionName: { type: string }
+        organizationId: { type: string, format: uuid }
+        organizationName: { type: string }
+    ExecutiveTaskSummary:
+      type: object
+      additionalProperties: false
+      required: [id, taskNo, title, lifecycleStatus, slaStatus, priority, dueAt, rowVersion, creationSource, orgUnitId, orgUnitName, assigneeAssignmentId, assigneeName, assigneePositionName, reviewerAssignmentId, reviewerName, progress]
+      properties:
+        id: { type: string, format: uuid }
+        taskNo: { type: string }
+        title: { type: string }
+        lifecycleStatus: { type: string }
+        slaStatus: { type: string }
+        priority: { type: string, enum: [LOW, NORMAL, HIGH, URGENT] }
+        dueAt: { type: [string, 'null'], format: date-time }
+        rowVersion: { type: integer, format: int64, minimum: 0 }
+        creationSource: { type: string }
+        orgUnitId: { type: string, format: uuid }
+        orgUnitName: { type: string }
+        assigneeAssignmentId: { type: string, format: uuid }
+        assigneeName: { type: string }
+        assigneePositionName: { type: string }
+        reviewerAssignmentId: { type: string, format: uuid }
+        reviewerName: { type: string }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+    ExecutiveTaskDetail:
+      allOf:
+        - $ref: '#/components/schemas/ExecutiveTaskSummary'
+        - type: object
+          properties:
+            description: { type: string }
+            resultSummary: { type: string }
+            evidenceCount: { type: integer, minimum: 0 }
+            reminderTimes: { type: array, maxItems: 8, items: { type: string, format: date-time } }
+      unevaluatedProperties: false
+    CreateExecutiveTask:
+      type: object
+      additionalProperties: false
+      required: [clientCommandId, targetAssignmentId, title, description, dueAt]
+      properties:
+        clientCommandId: { type: string, format: uuid }
+        targetAssignmentId: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 240 }
+        description: { type: string, minLength: 1 }
+        priority: { type: string, enum: [LOW, NORMAL, HIGH, URGENT], default: NORMAL }
+        dueAt: { type: string, format: date-time }
+        reminderTimes: { type: array, maxItems: 8, uniqueItems: true, items: { type: string, format: date-time } }
+    ApproveExecutiveTask:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        comment: { type: string }
+    ReworkExecutiveTask:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1 }
     AddTaskEvidence:
       type: object
       required: [submittedByAssignmentId, evidenceType]

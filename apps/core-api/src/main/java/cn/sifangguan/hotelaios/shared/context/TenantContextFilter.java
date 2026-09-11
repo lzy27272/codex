@@ -1,6 +1,7 @@
 package cn.sifangguan.hotelaios.shared.context;
 
 import cn.sifangguan.hotelaios.shared.security.EffectiveIdentityService;
+import cn.sifangguan.hotelaios.shared.security.BusinessIdentityException;
 import cn.sifangguan.hotelaios.shared.security.IdentityAuthenticationException;
 import cn.sifangguan.hotelaios.integrations.wecom.WeComSessionBindingGuard;
 import jakarta.servlet.FilterChain;
@@ -107,10 +108,14 @@ public class TenantContextFilter extends OncePerRequestFilter {
             TenantContext.set(principal);
             response.setHeader("X-Correlation-Id", correlationId.toString());
             filterChain.doFilter(request, response);
+        } catch (BusinessIdentityException exception) {
+            writeProblem(response, exception.status(), "业务身份无效", exception.getMessage(), exception.code());
         } catch (IdentityAuthenticationException exception) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "身份认证失败", exception.getMessage());
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "身份认证失败", exception.getMessage(),
+                    "AUTHENTICATION_FAILED");
         } catch (IllegalArgumentException exception) {
-            writeProblem(response, HttpStatus.BAD_REQUEST, "无效的身份上下文", exception.getMessage());
+            writeProblem(response, HttpStatus.BAD_REQUEST, "无效的身份上下文", exception.getMessage(),
+                    "REQUEST_INVALID");
         } finally {
             TenantContext.clear();
         }
@@ -196,7 +201,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
         try {
             return UUID.fromString(value);
         } catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("X-Assignment-Id不是有效UUID", exception);
+            throw BusinessIdentityException.invalidFormat();
         }
     }
 
@@ -215,12 +220,14 @@ public class TenantContextFilter extends OncePerRequestFilter {
             HttpServletResponse response,
             HttpStatus status,
             String title,
-            String detail
+            String detail,
+            String code
     ) throws IOException {
         response.setStatus(status.value());
         response.setContentType("application/problem+json;charset=UTF-8");
-        response.getWriter().write("{\"title\":\"" + escape(title) + "\",\"detail\":\""
-                + escape(detail) + "\"}");
+        response.getWriter().write("{\"title\":\"" + escape(title) + "\",\"status\":"
+                + status.value() + ",\"detail\":\"" + escape(detail) + "\",\"code\":\""
+                + escape(code) + "\"}");
     }
 
     private String escape(String value) {

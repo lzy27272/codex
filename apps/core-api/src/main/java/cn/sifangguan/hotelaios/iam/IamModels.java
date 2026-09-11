@@ -1,5 +1,6 @@
 package cn.sifangguan.hotelaios.iam;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -39,7 +40,18 @@ public final class IamModels {
             Set<String> permissions,
             boolean tenantScope,
             Set<UUID> organizationScopes,
-            List<PositionAssignment> positionAssignments
+            List<PositionAssignment> positionAssignments,
+            @JsonInclude(JsonInclude.Include.ALWAYS) UUID businessActorAssignmentId,
+            Capabilities capabilities
+    ) {
+    }
+
+    public record Capabilities(GroupManagementCapabilities groupManagement) {
+    }
+
+    public record GroupManagementCapabilities(
+            boolean workPlansEnabled,
+            boolean executiveTasksEnabled
     ) {
     }
 

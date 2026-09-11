@@ -71,6 +71,7 @@ class PostgresMigrationIntegrationTest {
                     .dataSource(ownerDataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
+                    .target("38")
                     .load()
                     .migrate()
                     .migrationsExecuted;

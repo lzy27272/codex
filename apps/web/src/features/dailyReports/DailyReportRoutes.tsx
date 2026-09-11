@@ -38,9 +38,9 @@ function ReportList({ mode, identity, params, go }: { mode: 'my' | 'team'; ident
 function ResolvedReportList({ mode, identity, params, go, initialBusinessDate, orgUnitId }: { mode: 'my' | 'team'; identity: RoleContext; params: RouteParams; go: AppNavigate; initialBusinessDate: string; orgUnitId: string }) {
   const [businessDate, setBusinessDate] = useState(initialBusinessDate)
   const [status, setStatus] = useState(params.status || '')
-  const key = `${identity.key}:daily-reports:${mode}:${businessDate}:${status}:${orgUnitId}:${identity.assignmentId ?? ''}`
+  const key = `${identity.key}:daily-reports:${mode}:${businessDate}:${status}:${orgUnitId}:${identity.businessActorAssignmentId ?? ''}`
   const resource = useScopedResource(key, (signal) => mode === 'my'
-    ? loadMyDailyReports(identity, signal, { businessDate, status, positionAssignmentId: identity.assignmentId })
+    ? loadMyDailyReports(identity, signal, { businessDate, status, positionAssignmentId: identity.businessActorAssignmentId })
     : loadTeamDailyReports(identity, signal, { businessDate, status, orgUnitId }), [], 30_000)
   const updateFilters = (nextDate: string, nextStatus: string) => {
     setBusinessDate(nextDate); setStatus(nextStatus)
@@ -79,7 +79,7 @@ function ReportEditor({ report, identity, grantedPermissions, correctionRevision
   const input: DailyReportDraftInput = { itemValues: report.currentRevision.sections.flatMap((section) => section.items.map((item) => ({ templateItemId: item.templateItemId, value: values[item.id], exception: exceptions.has(item.id) }))) }
   const reviewingHistoricalRevision = Boolean(correctionRevisionId && correctionRevisionId !== report.currentRevision.id)
   const reviewPermission = report.currentRevision.revisionType === 'CORRECTION' ? permissions.dailyReport.reviewCorrection : permissions.dailyReport.reviewException
-  const canReviewCurrentRevision = !reviewingHistoricalRevision && Boolean(identity.assignmentId) && hasPermission(grantedPermissions, reviewPermission)
+  const canReviewCurrentRevision = !reviewingHistoricalRevision && Boolean(identity.businessActorAssignmentId) && hasPermission(grantedPermissions, reviewPermission)
   const run = async (action: 'save' | 'submit' | 'correction' | 'approve' | 'reject') => {
     setMessage(undefined); setConflict(false)
     try {

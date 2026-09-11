@@ -53,6 +53,7 @@ type RouteDefinition = {
 const legacyViews: readonly ViewId[] = [
   'workbench',
   'all-functions',
+  'account-self-service',
   'hotel-dashboard',
   'operations-dashboard',
   'work-packages',

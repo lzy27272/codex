@@ -2,7 +2,7 @@ export type ApiIdentity = {
   tenantId: string
   actorId: string
   roleCode: string
-  assignmentId?: string
+  businessActorAssignmentId?: string
   orgScopes: string[]
 }
 
@@ -109,7 +109,9 @@ export function createIdempotencyKey(prefix = 'web'): string {
 
 function authenticationHeaders(identity: ApiIdentity): HeadersInit {
   const assignmentHeader: Record<string, string> = {}
-  if (identity.assignmentId) assignmentHeader['X-Assignment-Id'] = identity.assignmentId
+  if (identity.businessActorAssignmentId) {
+    assignmentHeader['X-Assignment-Id'] = identity.businessActorAssignmentId
+  }
   if (AUTH_MODE === 'dev-header') {
     return {
       'X-Tenant-Id': identity.tenantId,

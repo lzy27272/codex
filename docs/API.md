@@ -1,6 +1,6 @@
 # Hotel AI OS API-V1 使用说明
 
-当前机器可读契约见 [`openapi.yaml`](./openapi.yaml)，候选契约版本为 `0.2.4-pilot.7`。PILOT.7 在 `/api/v1` 内兼容补齐任务视图、可下发对象、原子创建派发和CEO门店驾驶舱，不改变 API 主版本。
+当前机器可读契约见 [`openapi.yaml`](./openapi.yaml)，代码候选契约版本为 `0.2.5-pilot.8`。线上Pilot仍运行`0.2.4-pilot.7`；PILOT.8批次A/B已增加业务任职合同与董事长受限交办接口，不改变 API 主版本。新能力仍默认关闭且未部署，工作计划接口尚未实现。
 
 ## 身份与权限
 
@@ -13,6 +13,10 @@
 - `X-Correlation-Id`：可选，缺省由服务端生成并回传。
 
 `X-Role-Code` 与 `X-Org-Scope` 已退出身份决策。当前身份基线可通过 `GET /api/v1/iam/me` 查询。
+
+PILOT.8使用`X-Assignment-Id`表达当前业务动作任职。首次身份请求不传时，`businessActorAssignmentId`为null但仍返回完整有效任职列表；前端据此默认选择主任职，后续请求显式传入。所选任职必须是当前账号、同租户且有效的任职。CEO和平台管理员的账号级权限、TENANT范围与业务任职相互独立：不选择任职仍可使用账号级后台能力，但后续需要岗位责任的业务动作必须传入并通过服务端校验。客户端不得用账号的其他任职合并动作权限。
+
+`GET /api/v1/iam/me`新增可空`businessActorAssignmentId`与`capabilities.groupManagement`。三项能力分别对应工作计划、高管交办和提醒Worker；服务端开关默认关闭，前端能力值只用于展示，不能替代服务端授权。
 
 ## 写操作约定
 
@@ -61,6 +65,16 @@
 - `GET /api/v1/dashboards/hotels/{hotelId}`：要求`dashboard.hotel`；CEO可选择租户内门店，店内主管只可访问其所属门店，跨门店仍拒绝。
 - `GET /api/v1/dashboards/operations`：要求独立的`dashboard.operations`，只返回当前租户和组织范围内的多门店经营数据。
 - 通用IAM只创建、修改和授予`CUSTOM`角色，并为创建、权限整组替换和授予写入追加式审计；`SYSTEM`角色只能由已发布岗位方案、受控初始化或数据库迁移维护。
+
+## TECH-V0.2-PILOT.8 批次A/B契约
+
+- OpenAPI制品升至`0.2.5-pilot.8`，`EffectiveIdentity`明确返回业务任职、任职列表和集团能力快照；`Problem`响应明确稳定`code`。
+- `X-Assignment-Id`在`/iam/me`为可选，在后续岗位责任命令中按接口合同必填；格式错误为`BUSINESS_ASSIGNMENT_INVALID_FORMAT`，非本人或失效任职为`BUSINESS_ASSIGNMENT_FORBIDDEN`，请求体演员与请求任职不一致为`BUSINESS_ACTOR_MISMATCH`。
+- `Idempotency-Key`统一限制为1—200字符，与现有命令幂等存储边界一致。
+- 批次B新增`GET/POST /api/v1/executive-tasks`、`GET /api/v1/executive-tasks/targets`、`GET /api/v1/executive-tasks/{taskId}`及专用`approve/rework`动作。六个接口都要求当前有效董事长业务任职、专用权限和租户功能门禁。
+- 创建交办的`Idempotency-Key`必须等于`clientCommandId`的规范UUID文本；客户端不得提交验收人、来源、组织、董事长任职或来源快照。目标只能是同租户集团根组织下的有效集团总经理/副总经理任职。
+- 专用列表不返回描述、结果、提醒或证据元数据；详情仅对当前董事长本人权威交办补充最小必要字段，不提供证据内容接口。董事长直调通用任务列表、详情、动作及证据接口统一拒绝。
+- `/api/v1/work-plans`仍尚未实现；高管交办和工作计划对应开关保持默认关闭。
 
 主数据维护继续使用API-V1向后兼容边界。`PUT`负责资料和`ACTIVE/INACTIVE`生命周期；`DELETE`只接受已停用且没有业务引用的数据。已存在任职、授权、工作或任务历史时返回400并要求保留停用记录，禁止级联删除历史。所有写操作要求`org.manage`，并继续执行租户和组织范围检查。
 

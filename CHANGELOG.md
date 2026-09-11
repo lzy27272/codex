@@ -14,17 +14,102 @@
 
 | 类型 | 标识示例 | 当前值 | 含义 |
 |---|---|---|---|
-| 产品蓝图 | PRODUCT-V1.2 | PRODUCT-V1.2 | 产品为什么这样设计、管理链和领域边界 |
+| 产品蓝图 | PRODUCT-V1.4 | PRODUCT-V1.4 | 产品为什么这样设计、管理链和领域边界 |
 | 技术发行 | TECH-V0.1 | TECH-V0.1 | 当前真正完成并验收的系统能力 |
 | API主版本 | API-V1 | /api/v1 | HTTP向后兼容边界 |
-| 数据库迁移 | DB-V4 | 已发布DB-V4；Pilot运行DB-V17 | 当前已发布基线与Pilot内部测试迁移位置 |
-| OpenAPI契约 | 0.1.0-sprint1 | 已发布0.1.0-sprint1；Pilot运行0.2.4-pilot.7 | 当前已发布与内部测试接口制品 |
+| 数据库迁移 | DB-V4 | 已发布DB-V4；当前代码候选基线含Flyway V39 | 正式发布基线与当前代码迁移范围 |
+| OpenAPI契约 | 0.1.0-sprint1 | 已发布0.1.0-sprint1；Pilot运行0.2.4-pilot.7；代码候选0.2.5-pilot.8 | 当前已发布、运行与代码候选接口制品 |
 
-禁止只写“V1.2”而不说明是PRODUCT、TECH、API还是数据库版本。
+禁止只写“V1.3”而不说明是PRODUCT、TECH、API还是数据库版本。
 
 ## Unreleased
 
 ### Added
+
+#### CHG-20260912-053：完成集团管理批次B董事长受限交办闭环
+
+- 日期：2026-09-12。
+- 状态：Unreleased / `TECH-V0.2-PILOT.8` BATCH B CODE COMPLETE / FEATURES OFF / NOT DEPLOYED。
+- 实施授权：产品负责人在批次A通过后明确“下一步”；本轮只实施B1—B3，不进入批次C/D。
+- 后端：新增专用列表、详情、目标、创建、验收、退回六个`/api/v1/executive-tasks`接口。创建命令在单事务内生成`PENDING_ACK`任务、精确ASSIGNEE/REVIEWER、董事长权威交办记录、双步时间线、提醒、审计、Outbox和任职通知。
+- 安全：所有专用接口都要求有效董事长业务任职、专用权限和租户功能门禁；目标只返回集团根组织有效GM/副总任职；验收/退回同时校验本人REVIEWER、顶层可信来源及权威指令。董事长访问通用任务、动作和证据端点统一拒绝。
+- 前端：增加独立懒加载高管交办页，董事长工作台计数和卡片仅使用专用最小投影；只在服务端能力、权限和业务任职同时成立时展示交办入口。董事长不再显示“全部功能”，移动端“我的”只有改密/退出，且多店导航改为“多门店经营”。
+- 契约：OpenAPI `0.2.5-pilot.8`明确六个端点、严格请求模型、字段最小化投影及稳定错误码。任务来源显示优先使用顶层`creationSource`，不从快照推断新来源。
+- 验证：高管交办专项、OpenAPI合同、Web 58项契约测试和TypeScript/Vite生产构建已通过；全量后端数据以批次B实施记录为准。
+- 边界：功能开关保持默认关闭；未创建真实人员/任职，未迁移运行库，未构建发布制品，未部署。工作计划闭环仍属批次C。
+- 关联文档：`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-BATCH-B-IMPLEMENTATION-REPORT.md`、`docs/API.md`、`docs/openapi.yaml`。
+
+#### CHG-20260911-052：完成集团管理批次A身份、迁移与契约底座
+
+- 日期：2026-09-11。
+- 状态：Unreleased / `TECH-V0.2-PILOT.8` BATCH A CODE COMPLETE / FEATURES OFF / NOT DEPLOYED。
+- 实施授权：产品负责人明确“开始编码”；依照冻结的分批门禁，本轮仅完成A0—A4，不进入B/C/D，不创建真实人员任职，不部署。
+- 身份与API合同：增加服务端确认的可空`businessActorAssignmentId`；首次身份请求不带任职时返回null和完整有效任职列表，前端再默认选择主任职或允许切换本人有效任职。CEO/平台管理员继续保留账号级权限和TENANT范围，但责任动作可独立携带业务任职。任职格式、归属和动作不匹配使用稳定400/403错误码；`/iam/me`新增集团能力开关快照。
+- 数据库：新增单一事务Flyway `V39__group_management_roles_and_work_plans.sql`，增加3个SYSTEM角色、4个岗位、8项权限、11张强制RLS租户表、直属/间接统一防环关系、工作计划结构、任务提醒、董事长权威交办关系及`management_task`可信来源；不修改V1—V38，不新增区域经理，不改写`OTA_OPERATION_MANAGER`，不猜测真实人员。
+- 权限与岗位：集团总经理岗位唯一映射既有`CEO`角色；新增集团董事长、行政人事主管、行政人事角色/岗位。董事长只获得冻结白名单及专用交办权限，不进入管理后台；行政人事普通岗位默认不具备计划提交能力。
+- 功能门禁：三项集团能力默认均为false；只要任一开关开启，租户白名单必须非空且全部为UUID，否则启动失败。当前未实现也未开放B批次董事长交办接口、C批次计划命令接口或D批次提醒Worker。
+- 前端与版本：统一以业务任职发送`X-Assignment-Id`，保留CEO账号级展示与独立业务任职选择；增加新岗位展示并移除“区域经理→OTA运营经理”“行政人事→HR_KPI_ADMIN”的泛化别名。Core API/Web升至`0.2.0-pilot.8`，OpenAPI升至`0.2.5-pilot.8`，API主版本仍为`/api/v1`。
+- 验证：Java编译、集团功能门禁测试、业务任职安全测试、真实PostgreSQL 14.22 V1→V39迁移测试、Web 54项契约测试和生产构建通过；全量后端最终计数见批次A实施记录。所有功能开关保持关闭。
+- 下一门禁：只有单独收到“进入下一批次”且A批次最终证据通过后，才可进入B批次；Pilot启用与部署仍需另行批准。
+- 关联文档：`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-IMPLEMENTATION-PLAN.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-BATCH-A-IMPLEMENTATION-REPORT.md`、`docs/API.md`。
+
+#### CHG-20260911-051：完成集团管理与工作计划正式技术冻结
+
+- 日期：2026-09-11。
+- 状态：Unreleased / TECH-DESIGN-1.0 FROZEN / IMPLEMENTATION READY / NOT CODED / NOT DEPLOYED。
+- 产品蓝图版本：PRODUCT-V1.4；业务设计版本：DESIGN-1.1。
+- 目标技术版本：正式固定为`TECH-V0.2-PILOT.8`；目标Core API/Web为`0.2.0-pilot.8`，目标OpenAPI制品为`0.2.5-pilot.8`，API主版本仍为`/api/v1`。
+- 变更类型：Security / Architecture / Documentation / Planning。
+- 修改内容：将技术草案评审结论冻结为TECH-DESIGN-1.0，明确CEO账号级授权与`GROUP_GENERAL_MANAGER`业务动作任职分离、董事长权威交办来源、精确直属审批、间接领导只读、计划批准原子转任务、提醒租约和敏感任务字段策略；同时拆出A—D四个实施批次及各自停止门禁。
+- 数据库影响：本轮没有执行数据库变更。实施目标固定为单一事务迁移`V39__group_management_roles_and_work_plans.sql`，一次增加可确定的角色、岗位、权限、十一张租户表、可信任务来源和关系约束；V1—V38保持不可变，真实人员任职不由迁移猜测。
+- API影响：本轮没有修改运行API。目标新增九个`/api/v1/work-plans`接口和六个专用`/api/v1/executive-tasks`查询/交办/验收接口，并完整定义业务任职、工作计划、高管交办和任务来源合同。
+- 权限及租户隔离影响：本轮没有运行时授权变化。目标实现要求所有新租户表强制RLS；董事长不进入管理后台，只能向GM/副总交办并验收本人权威交办；平台管理员不能代行总经理审批。
+- 历史数据影响：无。区域经理继续冻结不用，`OTA_OPERATION_MANAGER`历史零改写；技术草案DRAFT-V0.2作为评审历史保留。
+- 回滚或降级方案：本轮只有文档，可撤回本次未提交文档变更；未来V39失败时整笔事务回滚，生产数据库只允许备份恢复或前向修复，不采用破坏性down迁移。
+- 验证证据：完成后端、数据库和前端/API三路只读评审，统一选择单一V39方案并形成身份、安全、事务、RLS、迁移、前端和发布验收矩阵；未运行功能测试，不宣称功能可用。
+- 授权边界：产品负责人指示“进入下一步”，本次只完成正式技术冻结和实施计划；进入批次A仍须明确“开始编码”，Pilot启用和生产部署须分别批准。
+- 关联文档：`docs/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-TECHNICAL-FREEZE.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-IMPLEMENTATION-PLAN.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-DESIGN-FREEZE.md`、`docs/V1.4-ARCHITECTURE-FREEZE.md`。
+
+#### CHG-20260911-050：修订集团身份、汇报关系与董事长受限交办
+
+- 日期：2026-09-11。
+- 状态：Unreleased / PRODUCT-V1.4 DESIGN-1.1 FROZEN / TECHNICAL REVIEW PENDING / NOT CODED / NOT DEPLOYED。
+- 产品蓝图版本：PRODUCT-V1.4。
+- 目标技术版本：尚未立项；若沿当前Pilot增量实施，候选为`TECH-V0.2-PILOT.8`，开工时另行确认。
+- 变更类型：Added / Changed / Security / Documentation / Planning。
+- 修改内容：集团总经理与集团CEO冻结为同一岗位身份，新增唯一`GROUP_GENERAL_MANAGER`岗位并映射既有`CEO`角色，不新增同义系统角色；集团暂不启用区域经理，且`OTA_OPERATION_MANAGER`不再兼容为区域经理；新增`HR_ADMINISTRATION`行政人事和`HR_ADMINISTRATION_SUPERVISOR`行政人事主管角色及岗位，二者均直属集团总经理，集团副总经理通过独立关系作为间接领导；董事长增加`GROUP_CHAIRMAN`岗位任职，只能向集团总经理或集团副总经理交办并验收本人交办的任务。
+- 修改原因：按集团当前真实岗位设置消除CEO/集团总经理双身份，暂停尚不存在的区域经理层级，补齐行政人事汇报线，并在不开放管理后台或通用任务派发的前提下形成董事长交办闭环。
+- 影响模块：产品蓝图、组织与权限、岗位任职、直属/间接汇报关系、工作计划、任务中心、导航、审计、Outbox及候选API。
+- 数据库影响：本轮无数据库变更。候选实施需追加角色/岗位/任职种子、间接领导关系及工作计划相关表；董事长和CEO/GM使用真实岗位任职复用现有任务参与人模型。所有迁移须从届时下一可用编号追加，V1—V38历史迁移不修改。
+- API影响：本轮无API变更。候选实施新增工作计划接口及受限`/api/v1/executive-tasks`交办入口；目标必须由服务端固定为有效`GROUP_GENERAL_MANAGER`或`GROUP_VICE_PRESIDENT`任职。
+- 权限及租户隔离影响：本轮无运行时授权变化。董事长候选权限为全集团业务查看、参与人受限的`task.review`和专用`executive-task.assign`，不授予`*`、管理后台、通用`task.create/task.dispatch`、计划审批或其他目标派发。CEO既有账号级授权保持，但候选实现必须另行保留并校验总经理业务动作任职。两个人事岗位不复用高权限补充角色`HR_KPI_ADMIN`；副总间接领导首期只读督导，不获得计划审批、验收、代理或自动派活权。所有候选关系和计划表强制RLS。
+- 工作计划影响：集团总经理/CEO仍不提交；集团副总经理、行政人事主管及其他显式授权的管理岗提交并由精确直属主管审批。行政人事普通岗位默认不提交；董事长交办与工作计划审批是两个来源、权限和幂等键均独立的任务入口。
+- 历史数据影响：无。既有`CEO`、`GROUP_VICE_PRESIDENT`、`OTA_OPERATION_MANAGER`及`HR_KPI_ADMIN`代码和授权保持原义；PRODUCT-V1.3 / DESIGN-1.0未实施并作为被取代的历史冻结保留。
+- 回滚或降级方案：本轮只有文档；恢复时可回到V1.3历史口径，但不能据此改变任何运行态。实施后的数据库、权限与部署回滚方案必须在开工技术冻结中补齐。
+- 验证证据：在`main@788cfe724c082fc9716f28b66c276ac81c9488e9`只读核查现有`CEO`角色、`HR_KPI_ADMIN`补充角色、任务参与人任职约束和任务目标策略；本轮不运行功能测试，不宣称已实现或上线。
+- 产品批准依据：产品负责人于2026-09-11明确补充集团岗位、身份、汇报和董事长交办口径。
+- 技术批准人：待开工前技术评审确认。
+- 关联文档：`docs/V1.4-ARCHITECTURE-FREEZE.md`、`docs/HOTEL-AI-OS-PRODUCT-BLUEPRINT.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-DESIGN-FREEZE.md`、`docs/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-TECHNICAL-FREEZE-DRAFT.md`。
+
+#### CHG-20260911-049：冻结集团管理角色与周/月工作计划审批转任务
+
+- 日期：2026-09-11。
+- 状态：Unreleased / PRODUCT-V1.3 DESIGN FROZEN / TECHNICAL REVIEW PENDING / NOT CODED / NOT DEPLOYED。
+- 产品蓝图版本：PRODUCT-V1.3。
+- 目标技术版本：尚未立项；若沿当前Pilot增量实施，候选为`TECH-V0.2-PILOT.8`，不得静默占用已规划给AI的TECH-V0.3。
+- 变更类型：Added / Changed / Security / Documentation / Planning。
+- 修改内容：新增集团董事长、集团总经理、集团副总经理的角色与层级设计；新增集团总经理、集团副总经理岗位设计；冻结集团副总沿用`GROUP_VICE_PRESIDENT`、店总继续使用`GENERAL_MANAGER`的兼容规则；冻结集团副总经理及以下管理任职提交周/月计划、有效直属主管逐项审批任务内容/完成时间/提醒、批准后原子生成本人岗位任务的闭环。
+- 修改原因：建立集团总经理和集团副总经理位于区域经理之上的经营管理链，并将管理岗位的周期承诺转为可提醒、可执行、可验收的工作任务。
+- 影响模块：产品蓝图、组织与权限、任职汇报关系、工作计划、任务中心、提醒、审计、Outbox、岗位页面和董事长集团只读视图。
+- 数据库影响：本轮无数据库变更。候选实施需要新增工作计划、修订、审批、计划项决策、任务链接和任务提醒表，并从届时下一可用Flyway编号追加；V1—V38历史迁移不得修改。
+- API影响：本轮无API变更。候选实施在`/api/v1`向后兼容增加工作计划查询、草稿、提交、修订、审批、退回、拒绝和撤回接口；正式实现前再更新OpenAPI。
+- 权限及租户隔离影响：本轮无运行时授权变化。冻结新增`GROUP_CHAIRMAN`、`GROUP_GENERAL_MANAGER`、`work-plan.*`及只读`work-record.team-read`候选权限；所有计划审批岗位还需`task.read/task.review`并继续受任务`REVIEWER`参与人限制。董事长使用隔离账号级业务上下文和闭合只读白名单，不映射CEO、不进入配置管理员路径，也不合并兼职身份权限；所有候选租户表必须强制RLS，审批另校验精确直属主管任职与组织范围。
+- 历史数据影响：无。既有`GROUP_VICE_PRESIDENT`角色、岗位、任职和授权保留，只在实施时受控统一中文展示名；既有CEO、店总和店助语义不变。
+- 回滚或降级方案：本轮只有文档。后续若改变冻结口径，必须追加新的产品决策并取代本版本，不覆盖历史；实现后的数据库、权限和部署回滚方案在开工技术冻结时补齐。
+- 验证证据：在`main@788cfe724c082fc9716f28b66c276ac81c9488e9`完成现状只读核查；本轮不运行功能测试，不宣称实现或上线。
+- 产品批准依据：产品负责人于2026-09-11明确要求先完成修改前设定和冻结。
+- 技术批准人：待开工前技术评审确认。
+- 关联文档：`docs/V1.3-ARCHITECTURE-FREEZE.md`、`docs/HOTEL-AI-OS-PRODUCT-BLUEPRINT.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1-DESIGN-FREEZE.md`、`docs/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-TECHNICAL-FREEZE-DRAFT.md`。
 
 #### CHG-20260909-048：收紧系统角色治理并修复发布契约与健康门禁
 
@@ -722,9 +807,41 @@
 
 ## 产品决策历史
 
+### PRODUCT-V1.4 — 2026-09-11
+
+状态：已冻结、当前有效；技术尚未实现。
+
+#### CHG-20260911-050：修订集团身份、汇报关系与董事长受限交办
+
+- 修改内容：
+  - 集团总经理与集团CEO合并为同一岗位身份；`GROUP_GENERAL_MANAGER`岗位映射既有`CEO`角色，不新增同义角色。
+  - 区域经理冻结不用；不新增`REGIONAL_MANAGER`，不再把`OTA_OPERATION_MANAGER`兼容为区域经理。
+  - 新增行政人事、行政人事主管角色和岗位；二者均直属总经理/CEO，副总经理为独立表达的间接领导。
+  - 董事长增加岗位任职，但仍无管理后台权限；专用任务入口只允许向总经理/CEO或副总经理交办并验收本人任务。
+  - 延续管理岗周/月计划直属审批转任务，行政人事主管纳入、行政人事普通岗位默认不纳入。
+- 修改原因：使产品冻结与集团当前真实岗位及领导关系一致，并把董事长业务交办限制在最小必要边界。
+- 影响：取代PRODUCT-V1.3为当前产品基线；当前技术发行、API、数据库和部署状态不变。
+- 关联文档：`docs/V1.4-ARCHITECTURE-FREEZE.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-DESIGN-FREEZE.md`。
+
+### PRODUCT-V1.3 — 2026-09-11
+
+状态：已被PRODUCT-V1.4取代；未实现，历史永久保留。
+
+#### CHG-20260911-049：冻结集团管理角色与周/月工作计划审批转任务
+
+- 修改内容：
+  - 新增独立的集团董事长只读角色，不替代或继承CEO。
+  - 新增集团总经理角色和岗位；集团副总经理沿用既有`GROUP_VICE_PRESIDENT`角色和岗位。
+  - 冻结集团总经理→集团副总经理→区域经理的经营管理层级，实际审批以有效直属主管任职为准。
+  - 冻结集团副总经理及以下管理岗位提交周/月计划，直属主管逐项确认任务内容、完成时间和提醒。
+  - 全部通过后，每个计划项原子、幂等地生成一个分发给提交任职的任务；任一项不同意时整单退回且不生成任务。
+- 修改原因：分离集团观察权、经营管理权和系统配置权，并把管理承诺纳入任务执行与验收闭环。
+- 影响：取代PRODUCT-V1.2为当前产品基线；当前技术发行、API、数据库和部署状态不变。
+- 关联文档：`docs/V1.3-ARCHITECTURE-FREEZE.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1-DESIGN-FREEZE.md`。
+
 ### PRODUCT-V1.2 — 2026-07-17
 
-状态：已冻结、当前有效。
+状态：已被PRODUCT-V1.3取代，历史永久保留。
 
 #### CHG-20260717-003：冻结Hotel AI OS核心管理架构
 

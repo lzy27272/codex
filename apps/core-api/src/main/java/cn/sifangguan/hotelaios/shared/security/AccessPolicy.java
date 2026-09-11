@@ -50,4 +50,20 @@ public class AccessPolicy {
             throw new AccessDeniedException("任职无效或不属于当前账号");
         }
     }
+
+    public UUID requireBusinessActorAssignment() {
+        UUID assignmentId = principal().businessActorAssignmentId();
+        if (assignmentId == null) {
+            throw BusinessIdentityException.required();
+        }
+        return assignmentId;
+    }
+
+    public UUID requireBusinessActorAssignment(UUID claimedAssignmentId) {
+        UUID assignmentId = requireBusinessActorAssignment();
+        if (claimedAssignmentId == null || !assignmentId.equals(claimedAssignmentId)) {
+            throw BusinessIdentityException.mismatch();
+        }
+        return assignmentId;
+    }
 }

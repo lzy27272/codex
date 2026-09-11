@@ -19,8 +19,8 @@ function snapshotText(value: unknown): string {
 }
 
 function requiredAssignmentId(identity: ApiIdentity): string {
-  if (!identity.assignmentId) throw new Error('请先选择当前任职后再执行该操作')
-  return identity.assignmentId
+  if (!identity.businessActorAssignmentId) throw new Error('请先选择当前任职后再执行该操作')
+  return identity.businessActorAssignmentId
 }
 
 function issueActions(status: string): string[] {

@@ -18,6 +18,8 @@ import java.util.UUID;
 public class EffectiveIdentityService {
     private static final List<String> ROLE_PRIORITY = List.of(
             "PLATFORM_ADMIN", "GROUP_ADMIN", "CEO", "GENERAL_MANAGER",
+            "GROUP_CHAIRMAN", "GROUP_VICE_PRESIDENT",
+            "HR_ADMINISTRATION_SUPERVISOR", "HR_ADMINISTRATION",
             "ASSISTANT_GENERAL_MANAGER", "OTA_OPERATION_MANAGER",
             "FRONT_OFFICE_SUPERVISOR", "HOUSEKEEPING_SUPERVISOR",
             "OTA_OPERATION_ASSISTANT", "FRONT_DESK"
@@ -26,6 +28,7 @@ public class EffectiveIdentityService {
     private static final Set<String> SUPPLEMENTAL_ACCOUNT_ROLES = Set.of("HR_KPI_ADMIN");
     private static final Set<String> RESERVED_SYSTEM_ROLE_CODES = Set.of(
             "PLATFORM_ADMIN", "GROUP_ADMIN", "CEO", "GROUP_VICE_PRESIDENT",
+            "GROUP_CHAIRMAN", "HR_ADMINISTRATION_SUPERVISOR", "HR_ADMINISTRATION",
             "GENERAL_MANAGER", "ASSISTANT_GENERAL_MANAGER", "OTA_OPERATION_MANAGER",
             "OTA_OPERATION_ASSISTANT", "FRONT_OFFICE_SUPERVISOR",
             "HOUSEKEEPING_SUPERVISOR", "HOUSEKEEPING_ATTENDANT", "FRONT_DESK",
@@ -93,7 +96,7 @@ public class EffectiveIdentityService {
                 .toList();
         if (requestedAssignmentId != null
                 && activeAssignments.stream().noneMatch(item -> item.assignmentId().equals(requestedAssignmentId))) {
-            throw new IdentityAuthenticationException("所选任职无效、已暂停或不属于当前账号");
+            throw BusinessIdentityException.forbidden();
         }
         if (activeAssignments.isEmpty()) {
             Integer linkedEmployees = jdbc.queryForObject("""
@@ -108,14 +111,16 @@ public class EffectiveIdentityService {
 
         if (!bindRequestToAssignment || fullAccountLevel || activeAssignments.isEmpty()) {
             return accountWidePrincipal(
-                    tenantId, accountId, correlationId, effectiveGrants, activeAssignments);
+                    tenantId, accountId, correlationId, effectiveGrants, activeAssignments,
+                    bindRequestToAssignment ? requestedAssignmentId : null);
         }
 
         AssignmentScope selected = selectAssignment(activeAssignments, requestedAssignmentId);
         List<RoleGrant> selectedGrants = grants.stream()
                 .filter(grant -> grantSupportsAssignment(tenantId, grant, selected))
                 .toList();
-        return assignmentPrincipal(tenantId, accountId, correlationId, selected, selectedGrants);
+        return assignmentPrincipal(
+                tenantId, accountId, correlationId, selected, selectedGrants, requestedAssignmentId);
     }
 
     private List<RoleGrant> roleGrants(MapSqlParameterSource params) {
@@ -233,7 +238,8 @@ public class EffectiveIdentityService {
             UUID accountId,
             UUID correlationId,
             List<RoleGrant> grants,
-            List<AssignmentScope> activeAssignments
+            List<AssignmentScope> activeAssignments,
+            UUID businessActorAssignmentId
     ) {
         Set<String> roles = new LinkedHashSet<>();
         boolean tenantScope = false;
@@ -270,7 +276,7 @@ public class EffectiveIdentityService {
         Set<UUID> assignmentIds = new LinkedHashSet<>();
         activeAssignments.forEach(assignment -> assignmentIds.add(assignment.assignmentId()));
         return principal(tenantId, accountId, correlationId, roles, permissions, scopes,
-                assignmentIds, tenantScope);
+                assignmentIds, businessActorAssignmentId, tenantScope);
     }
 
     private TenantPrincipal assignmentPrincipal(
@@ -278,7 +284,8 @@ public class EffectiveIdentityService {
             UUID accountId,
             UUID correlationId,
             AssignmentScope selected,
-            List<RoleGrant> grants
+            List<RoleGrant> grants,
+            UUID businessActorAssignmentId
     ) {
         Set<String> permissions;
         boolean tenantScope = false;
@@ -337,6 +344,7 @@ public class EffectiveIdentityService {
                 permissions,
                 scopes,
                 Set.of(selected.assignmentId()),
+                businessActorAssignmentId,
                 tenantScope,
                 correlationId
         );
@@ -469,6 +477,7 @@ public class EffectiveIdentityService {
             Set<String> permissions,
             Set<UUID> scopes,
             Set<UUID> assignmentIds,
+            UUID businessActorAssignmentId,
             boolean tenantScope
     ) {
         String primaryRole = roles.stream()
@@ -476,7 +485,7 @@ public class EffectiveIdentityService {
                         .thenComparing(String::compareTo))
                 .orElse("UNASSIGNED");
         return new TenantPrincipal(tenantId, accountId, primaryRole, roles, permissions,
-                scopes, assignmentIds, tenantScope, correlationId);
+                scopes, assignmentIds, businessActorAssignmentId, tenantScope, correlationId);
     }
 
     private static int priorityOf(String role) {

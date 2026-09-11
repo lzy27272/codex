@@ -3,13 +3,13 @@
 | 项目 | 当前值 |
 |---|---|
 | 当前技术发行 | TECH-V0.1 |
-| 当前状态 | TECH-V0.1已发布；TECH-V0.2-PILOT.7内部修复版运行中，行政人事KPI中心已完成本地Pilot部署；TECH-V0.2正式发布门禁仍NO-GO |
-| 当前产品蓝图 | PRODUCT-V1.2 |
+| 当前状态 | TECH-V0.1已发布；TECH-V0.2-PILOT.7仍在运行；TECH-V0.2-PILOT.8批次A/B已完成本地编码、功能关闭且未部署；TECH-V0.2正式发布门禁仍NO-GO |
+| 当前产品蓝图 | PRODUCT-V1.4 |
 | 当前API主版本 | API-V1（/api/v1） |
-| 当前OpenAPI契约 | 已发布0.1.0-sprint1；Pilot运行0.2.4-pilot.7 |
-| 当前数据库迁移 | 已发布DB-V4；Pilot运行Flyway V27 |
-| 当前后端制品 | 0.2.0-pilot.7内部候选 |
-| 最后更新 | 2026-08-12 |
+| 当前OpenAPI契约 | 已发布0.1.0-sprint1；Pilot运行0.2.4-pilot.7；代码候选0.2.5-pilot.8 |
+| 当前数据库迁移 | 已发布DB-V4；当前代码候选基线包含Flyway V1—V39 |
+| 当前后端制品 | 运行0.2.0-pilot.7；代码候选0.2.0-pilot.8，未部署 |
+| 最后更新 | 2026-09-12 |
 
 ## 0. 文档职责
 
@@ -58,8 +58,9 @@
 | TECH-V0.2-PILOT.5 | 已由PILOT.6替代 / 保留为回滚历史 | 真实PostgreSQL、真实应用账号、组织岗位人员维护、七岗位专属工作包、真实填报、图片附件、团队权限及驾驶舱 | PRODUCT-V1.2 |
 | TECH-V0.2-PILOT.6 | 已由PILOT.7替代 / 保留为回滚历史 | 统一工作提交、多附件、任务下达与证据、CEO岗位工作/任务/门店驾驶舱模板治理 | PRODUCT-V1.2 |
 | TECH-V0.2-PILOT.7 | 内部修复版 / 技术与公网业务闭环PASS / 待持续门店试用 | 可点击角色工作台与驾驶舱、原子任务投递、任务读取隔离、自动刷新接收、无标准人工验收、全角色任务目标矩阵、UAT数据清理 | PRODUCT-V1.2 |
+| TECH-V0.2-PILOT.8（候选） | 批次A/B本地编码完成 / 功能关闭 / C—D未开始 / 未部署 | 已完成业务任职与V39底座，以及董事长受限交办、专用最小投影、验收/退回和前端入口；计划与提醒闭环待后续批次 | PRODUCT-V1.4 |
 | TECH-V0.2 | RC Final技术验证PASS / Release NO-GO / Unreleased | 标准→工作包→记录→评价→规则→任务→执行→验收闭环 | PRODUCT-V1.2 |
-| TECH-V0.3 | 预实施计划V1.1已输出 / 待技术冻结 / 未启动 | AI Gateway、工作/经营/点评/CEO Agent、AI简报和AI主动发现 | PRODUCT-V1.2 |
+| TECH-V0.3 | 预实施计划V1.1已输出 / 待技术冻结 / 未启动 / 开工前须按届时当前产品基线重评 | AI Gateway、工作/经营/点评/CEO Agent、AI简报和AI主动发现 | 原设计PRODUCT-V1.2；当前须重基线PRODUCT-V1.4 |
 | TECH-V0.4 | 建议阶段 | 绩效复盘、知识沉淀和标准优化建议 | PRODUCT-V1.2 |
 | TECH-V0.5 | 建议阶段 | 集团规模化、外部适配、数据质量和跨区域试点 | PRODUCT-V1.2或后续蓝图 |
 | TECH-V1.0 | 目标版本 | 集团内部正式使用 | 届时有效PRODUCT版本 |
@@ -354,11 +355,68 @@
 - 安全边界：应用账号连续失败5次临时锁定，登录后使用短期JWT；服务端RBAC、组织范围和PostgreSQL RLS保持不变。
 - 版本影响：无数据库迁移、无业务数据修改、无API主版本变化；PILOT.6继续内部测试运行，TECH-V0.2仍为Unreleased。
 
+### 5.21 PRODUCT-V1.3集团管理与工作计划预实施冻结（2026-09-11）
+
+- 状态：业务设计已冻结 / 技术草案待评审 / NOT CODED / NOT DEPLOYED。
+- 产品基线升级为PRODUCT-V1.3，但当前技术发行和TECH-V0.2-PILOT.7运行状态不变。
+- 冻结范围：新增集团董事长只读角色、集团总经理角色和岗位；既有`GROUP_VICE_PRESIDENT`统一作为集团副总经理；集团总经理→集团副总经理→区域经理的经营管理层级；集团副总经理及以下管理任职提交周/月计划，直属主管逐项审批后自动生成本人岗位任务。
+- 技术候选：沿当前Pilot增量时可使用`TECH-V0.2-PILOT.8`，但该编号须在开工批准时确认；不得静默占用已规划给AI的TECH-V0.3。
+- 数据库：本轮无迁移。实施时必须从届时下一可用编号追加，V1—V38历史迁移保持不可变。
+- API和页面：本轮不改变`/api/v1`契约或现有页面；候选接口、权限、状态机和页面写在技术冻结草案中。
+- 验证：仅完成基线与设计一致性核查，没有运行功能测试；不得据此宣称功能可用或已部署。
+- 依据：`docs/V1.3-ARCHITECTURE-FREEZE.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1-DESIGN-FREEZE.md`、`docs/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-TECHNICAL-FREEZE-DRAFT.md`。
+
+### 5.22 PRODUCT-V1.4集团身份与受限交办修订冻结（2026-09-11）
+
+- 状态：DESIGN-1.1已冻结 / 技术草案DRAFT-V0.2待评审 / NOT CODED / NOT DEPLOYED。
+- 产品基线升级为PRODUCT-V1.4；PRODUCT-V1.3未实施并作为历史冻结保留，当前技术发行和TECH-V0.2-PILOT.7运行状态不变。
+- 身份与岗位：集团总经理和集团CEO合并为同一岗位身份；新增唯一`GROUP_GENERAL_MANAGER`岗位并映射既有`CEO`角色，不新增同义系统角色。CEO账号级授权范围继续保留，但业务命令必须单独保存并校验总经理任职。董事长使用`GROUP_CHAIRMAN`角色和岗位任职，但不获得管理后台权限。
+- 组织关系：区域经理为`DEFERRED / NOT IN USE`，`OTA_OPERATION_MANAGER`保持OTA运营经理本义；新增`HR_ADMINISTRATION`和`HR_ADMINISTRATION_SUPERVISOR`，两者均直属集团总经理，指定副总经理通过独立`INDIRECT_LEADER`关系进行首期只读督导。
+- 任务边界：董事长候选专用权限`executive-task.assign`只允许向有效集团总经理或集团副总经理任职创建并立即派发任务；董事长任职为`REVIEWER`，只能验收或退回本人交办任务。该入口与计划生成任务使用不同来源和幂等键。
+- 工作计划：集团副总经理、行政人事主管及其他显式授权管理岗提交，精确直属主管审批；行政人事普通岗位、集团总经理和董事长不提交，间接领导不代审。
+- 技术候选仍可使用`TECH-V0.2-PILOT.8`，但编号须在开工批准时确认；本轮无迁移、API、代码、页面、账号、任职或运行时权限变更。
+- 依据：`docs/V1.4-ARCHITECTURE-FREEZE.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-DESIGN-FREEZE.md`、`docs/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-TECHNICAL-FREEZE-DRAFT.md`。
+
+### 5.23 TECH-DESIGN-1.0正式技术冻结（2026-09-11）
+
+- 状态：FROZEN / IMPLEMENTATION READY / NOT CODED / NOT DEPLOYED；当前技术发行和TECH-V0.2-PILOT.7运行状态不变。
+- 版本：PRODUCT-V1.4、DESIGN-1.1；目标正式固定为`TECH-V0.2-PILOT.8`、Core API/Web `0.2.0-pilot.8`、OpenAPI `0.2.5-pilot.8`，API主版本继续为`/api/v1`。
+- 身份：增加独立`businessActorAssignmentId`技术合同。CEO保留账号级权限，但总经理审批、验收等责任动作必须使用服务端验证的有效`GROUP_GENERAL_MANAGER`任职；平台管理员不能代行。
+- 迁移：实施目标固定为单一事务迁移`V39__group_management_roles_and_work_plans.sql`；本轮只预留编号和结构合同，没有创建迁移文件、执行数据库变更或修改V1—V38。
+- 安全：董事长只走专用交办服务，权威来源记录与任务参与人共同授权；全集团任务只返回最小字段，其他来源或非本人交办任务动作全部403。新租户表必须强制RLS。
+- 工作计划：精确直属主管逐项决定任务内容、完成时间和提醒，只有整单通过才在单事务内生成N项对应N任务；间接领导首期只读。
+- 实施：按A身份/迁移/契约、B董事长交办、C周/月计划、D提醒/回归/Pilot准备四批推进。真实人员任职映射不阻塞通用编码，但阻塞目标租户启用和部署。
+- 授权边界：本次没有代码、页面、API、账号、任职、运行时权限或部署变化；进入批次A仍须明确“开始编码”。
+- 依据：`docs/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-TECHNICAL-FREEZE.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-V1.1-IMPLEMENTATION-PLAN.md`。
+
+### 5.24 TECH-V0.2-PILOT.8批次A本地实施（2026-09-11）
+
+- 状态：BATCH A CODE COMPLETE / FEATURES OFF / NOT DEPLOYED；线上仍为PILOT.7，本记录不提升正式发布状态。
+- 身份：新增服务端验证的`businessActorAssignmentId`，分离CEO/平台管理员账号级授权与岗位责任动作任职；首次身份请求保持业务演员为空并返回任职列表，前端随后默认主任职或允许显式选择本人有效任职，错误分类为稳定400/403。
+- 数据库：新增单一Flyway V39，原子增加3个SYSTEM角色、4个岗位、8项权限、11张强制RLS租户表、任务可信来源及直属/间接统一防环关系；不新增区域经理、不改写OTA运营经理、不写入真实任职。
+- 前端/API：Core API与Web候选版本为`0.2.0-pilot.8`，OpenAPI为`0.2.5-pilot.8`；前端统一发送业务任职头，新增董事长和行政人事岗位展示，CEO保留账号级展示与独立任职选择。
+- 门禁：工作计划、高管交办、提醒Worker三项开关默认关闭；任一开启而租户白名单为空或非法时应用启动失败。B/C/D业务能力尚未编码或启用。
+- 验证：Java编译、专项身份/开关/真实PostgreSQL迁移测试、Web 54项契约测试和生产构建通过；全量结果和剩余门禁见批次A实施记录。
+- 授权边界：本轮授权只覆盖批次A；进入B、Pilot启用和部署均需分别批准。
+- 依据：`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-BATCH-A-IMPLEMENTATION-REPORT.md`。
+
+### 5.25 TECH-V0.2-PILOT.8批次B本地实施（2026-09-12）
+
+- 状态：BATCH B CODE COMPLETE / FEATURES OFF / NOT DEPLOYED；线上仍为PILOT.7，未迁移运行库。
+- 闭环：新增六个`/api/v1/executive-tasks`专用接口，原子创建任务、参与人、权威交办记录、CREATE/DISPATCH时间线、提醒、审计、Outbox和通知，并支持董事长验收/退回本人交办。
+- 安全：目标固定为同租户集团根组织下有效GM/副总任职；服务端派生验收人和来源，未知/伪造字段失败关闭；董事长通用任务、动作及证据API统一拒绝。
+- 前端：董事长工作台与任务中心只使用专用最小投影；交办模块独立懒加载；移除“全部功能”和管理后台入口，移动端“我的”仅保留改密/退出，“区域多门店”统一更名为“多门店经营”。
+- 验证：详见批次B实施记录；功能关闭、身份错误、目标越权、伪造字段、非本人动作、幂等和事务原子性均有自动化证据。
+- 下一门禁：不自动进入批次C；工作计划、提醒Worker、真实人员映射、租户启用和部署仍需分别授权。
+- 依据：`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-BATCH-B-IMPLEMENTATION-REPORT.md`。
+
 ## 6. TECH-V0.3
 
 ### 6.1 状态
 
 预实施计划V1.0于2026-07-17输出，V1.1于2026-07-18增加受限CEO Agent和《CEO AI经营简报》。2026-07-18已形成`docs/TECH-V0.3-TECHNICAL-FREEZE-DRAFT.md`，但状态仍为`DRAFT / 待数据安全与多方评审 / 未启动编码`。只有TECH-V0.2正式发布、冻结参数确认并完成独立批准后，技术冻结才能生效。
+
+该预实施计划和草案原按PRODUCT-V1.2编制。当前产品基线已于2026-09-11升级为PRODUCT-V1.4，因此TECH-V0.3开工前还必须按届时当前PRODUCT版本完成影响评审并明确重基线；本次不覆盖历史草案，也不视为TECH-V0.3已更新。
 
 产品负责人在TECH-V0.2 Final UAT选择B后单独授权先输出计划，用于技术审查和资源安排；该授权不等于允许绕过TECH-V0.2发布门禁开始开发。
 

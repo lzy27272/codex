@@ -91,6 +91,19 @@ export const permissions = Object.freeze({
     manage: 'wecom-binding.manage',
     approve: 'wecom-binding.approve',
   },
+  workPlan: {
+    read: 'work-plan.read',
+    submit: 'work-plan.submit',
+    readTeam: 'work-plan.team-read',
+    review: 'work-plan.review',
+  },
+  workRecord: {
+    readTeam: 'work-record.team-read',
+  },
+  executiveTask: {
+    read: 'executive-task.read',
+    assign: 'executive-task.assign',
+  },
 })
 
 export function hasPermission(granted: string[], permission: string): boolean {

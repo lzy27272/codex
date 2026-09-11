@@ -35,6 +35,11 @@ management:
         enabled: true
 
 app:
+  group-management:
+    work-plans-enabled: ${GROUP_MANAGEMENT_WORK_PLANS_ENABLED:false}
+    executive-tasks-enabled: ${GROUP_MANAGEMENT_EXECUTIVE_TASKS_ENABLED:false}
+    reminder-worker-enabled: ${GROUP_MANAGEMENT_REMINDER_WORKER_ENABLED:false}
+    tenant-ids: ${GROUP_MANAGEMENT_TENANT_IDS:}
   kpi:
     ota-source:
       snapshot-path: ${KPI_OTA_SNAPSHOT_PATH:}

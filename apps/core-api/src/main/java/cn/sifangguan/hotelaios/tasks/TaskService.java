@@ -80,6 +80,7 @@ public class TaskService {
     public List<Map<String, Object>> list(String view, String status, UUID orgUnitId) {
         accessPolicy.requirePermission("task.read");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         String normalizedView = normalizeView(view);
         if ("TEAM".equals(normalizedView)
                 && !principal.hasTenantScope()
@@ -94,6 +95,7 @@ public class TaskService {
                 .addValue("orgUnitId", orgUnitId);
         return jdbc.queryForList("""
                 select t.id, t.task_no, t.title, t.description, t.lifecycle_status, t.sla_status, t.priority,
+                       t.creation_source,
                        t.org_unit_id, o.name as org_unit_name, t.standard_version_id, t.result_snapshot,
                        t.due_at, t.row_version, t.created_at,
                        a.position_assignment_id as assignee_assignment_id,
@@ -155,6 +157,7 @@ public class TaskService {
     public List<Map<String, Object>> targets() {
         accessPolicy.requirePermission("task.create");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         return taskTargetPolicy.listTargets(principal);
     }
 
@@ -162,6 +165,7 @@ public class TaskService {
     public Map<String, Object> detail(UUID taskId) {
         accessPolicy.requirePermission("task.read");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         return detailResult(principal, taskId);
     }
 
@@ -187,6 +191,7 @@ public class TaskService {
     public List<Map<String, Object>> timeline(UUID taskId) {
         accessPolicy.requirePermission("task.read");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         requireVisible(principal, taskId);
         return jdbc.queryForList("""
                 select id, from_status, to_status, command, actor_account_id, actor_assignment_id,
@@ -200,6 +205,7 @@ public class TaskService {
     public Map<String, Object> create(TaskModels.CreateTask request, String idempotencyKey) {
         accessPolicy.requirePermission("task.create");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         UUID reviewerAssignmentId = taskTargetPolicy.resolveReviewer(
                 principal,
                 request.orgUnitId(),
@@ -305,6 +311,7 @@ public class TaskService {
             default -> throw new IllegalArgumentException("不支持的任务命令: " + normalizedCommand);
         }
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         requireVisible(principal, taskId);
         return transition(taskId, normalizedCommand, idempotencyKey, request, false, null);
     }
@@ -313,6 +320,7 @@ public class TaskService {
     public Map<String, Object> addEvidence(UUID taskId, TaskModels.AddEvidence request) {
         accessPolicy.requirePermission("task.act");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         requireVisible(principal, taskId);
         requireActorAssignment(principal, request.submittedByAssignmentId());
         requireParticipant(principal, taskId, request.submittedByAssignmentId(), Set.of("ASSIGNEE", "REVIEWER"));
@@ -350,6 +358,7 @@ public class TaskService {
     public Map<String, Object> uploadEvidence(UUID taskId, UUID submittedByAssignmentId, MultipartFile file) {
         accessPolicy.requirePermission("task.act");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         requireVisible(principal, taskId);
         requireActorAssignment(principal, submittedByAssignmentId);
         requireParticipant(principal, taskId, submittedByAssignmentId, Set.of("ASSIGNEE"));
@@ -390,6 +399,7 @@ public class TaskService {
     public AttachmentService.Download evidenceContent(UUID taskId, UUID evidenceId) {
         accessPolicy.requirePermission("task.read");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         requireVisible(principal, taskId);
         Map<String, Object> evidence = jdbc.queryForMap("""
                 select object_key, original_name, media_type, size_bytes, scan_status
@@ -406,6 +416,7 @@ public class TaskService {
     public void deleteEvidence(UUID taskId, UUID evidenceId, UUID actorAssignmentId) {
         accessPolicy.requirePermission("task.act");
         TenantPrincipal principal = prepare();
+        rejectChairmanBusinessActor(principal);
         requireVisible(principal, taskId);
         requireActorAssignment(principal, actorAssignmentId);
         requireParticipant(principal, taskId, actorAssignmentId, Set.of("ASSIGNEE"));
@@ -1026,7 +1037,8 @@ public class TaskService {
                 select t.id, t.task_no, t.source_event_id, t.source_action_id, t.standard_version_id, t.work_record_id,
                        t.org_unit_id, o.name as org_unit_name, t.title, t.description,
                        t.lifecycle_status, t.sla_status, t.priority, t.due_at,
-                       t.completed_at, t.source_snapshot, t.responsibility_snapshot, t.result_snapshot,
+                       t.completed_at, t.creation_source, t.created_by_assignment_id,
+                       t.source_snapshot, t.responsibility_snapshot, t.result_snapshot,
                        t.row_version, t.created_by, t.created_at, t.updated_at
                 from management_task t
                 join org_unit o on o.tenant_id = t.tenant_id and o.id = t.org_unit_id
@@ -1050,6 +1062,24 @@ public class TaskService {
         TenantPrincipal principal = accessPolicy.principal();
         databaseContext.apply(principal.tenantId());
         return principal;
+    }
+
+    private void rejectChairmanBusinessActor(TenantPrincipal principal) {
+        UUID assignmentId = principal.businessActorAssignmentId();
+        if (assignmentId == null) return;
+        Integer chairman = jdbc.queryForObject("""
+                select count(*)
+                from employee_position_assignment assignment
+                join position_definition position on position.tenant_id = assignment.tenant_id
+                                                 and position.id = assignment.position_id
+                where assignment.tenant_id = :tenantId and assignment.id = :assignmentId
+                  and assignment.status = 'ACTIVE' and assignment.valid_from <= current_date
+                  and (assignment.valid_to is null or assignment.valid_to >= current_date)
+                  and position.code = 'GROUP_CHAIRMAN'
+                """, base(principal).addValue("assignmentId", assignmentId), Integer.class);
+        if (chairman != null && chairman > 0) {
+            throw new AccessDeniedException("集团董事长只能使用专用高管交办任务接口");
+        }
     }
 
     private MapSqlParameterSource base(TenantPrincipal principal) {

@@ -173,15 +173,15 @@ function TeamWorkDrawer({ initial, identity, permissions, onClose, onChanged }: 
   }
 
   const createTask = () => {
-    if (!record?.targetOrgUnitId || !record.positionAssignmentId || !identity.assignmentId) {
+    if (!record?.targetOrgUnitId || !record.positionAssignmentId || !identity.businessActorAssignmentId) {
       setMessage({ tone: 'error', text: '记录缺少目标组织、执行任职或当前验收任职，无法安全创建任务。' }); return
     }
-    if (record.positionAssignmentId === identity.assignmentId) {
+    if (record.positionAssignmentId === identity.businessActorAssignmentId) {
       setMessage({ tone: 'error', text: '负责人和验收人不能是同一任职。' }); return
     }
     void mutation('task', () => createCorrectiveTask(identity, {
-      orgUnitId: record.targetOrgUnitId!, assigneeAssignmentId: record.positionAssignmentId!, reviewerAssignmentId: identity.assignmentId!,
-      creatorAssignmentId: identity.assignmentId!,
+      orgUnitId: record.targetOrgUnitId!, assigneeAssignmentId: record.positionAssignmentId!, reviewerAssignmentId: identity.businessActorAssignmentId!,
+      creatorAssignmentId: identity.businessActorAssignmentId!,
       standardVersionId: selectedStandard || undefined, workRecordId: record.id, title: taskTitle,
       description: taskDescription, priority: taskPriority, dueAt: taskDueAt ? new Date(taskDueAt).toISOString() : undefined,
     }), '整改任务已创建并派发，接收人可立即在任务与通知中心查看。')

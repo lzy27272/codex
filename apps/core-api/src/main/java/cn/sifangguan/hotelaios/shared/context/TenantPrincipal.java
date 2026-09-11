@@ -19,6 +19,7 @@ public final class TenantPrincipal {
     private final Set<String> permissions;
     private final Set<UUID> orgScopes;
     private final Set<UUID> assignmentIds;
+    private final UUID businessActorAssignmentId;
     private final boolean tenantScope;
     private final UUID correlationId;
 
@@ -41,6 +42,7 @@ public final class TenantPrincipal {
                 Set.of(),
                 orgScopes,
                 Set.of(),
+                null,
                 LEGACY_TENANT_ROLES.contains(roleCode),
                 correlationId
         );
@@ -57,6 +59,22 @@ public final class TenantPrincipal {
             boolean tenantScope,
             UUID correlationId
     ) {
+        this(tenantId, actorId, roleCode, roleCodes, permissions, orgScopes,
+                assignmentIds, null, tenantScope, correlationId);
+    }
+
+    public TenantPrincipal(
+            UUID tenantId,
+            UUID actorId,
+            String roleCode,
+            Set<String> roleCodes,
+            Set<String> permissions,
+            Set<UUID> orgScopes,
+            Set<UUID> assignmentIds,
+            UUID businessActorAssignmentId,
+            boolean tenantScope,
+            UUID correlationId
+    ) {
         this.tenantId = Objects.requireNonNull(tenantId, "tenantId");
         this.actorId = Objects.requireNonNull(actorId, "actorId");
         this.roleCode = Objects.requireNonNull(roleCode, "roleCode");
@@ -64,6 +82,7 @@ public final class TenantPrincipal {
         this.permissions = immutable(permissions);
         this.orgScopes = immutable(orgScopes);
         this.assignmentIds = immutable(assignmentIds);
+        this.businessActorAssignmentId = businessActorAssignmentId;
         this.tenantScope = tenantScope;
         this.correlationId = Objects.requireNonNull(correlationId, "correlationId");
     }
@@ -98,6 +117,15 @@ public final class TenantPrincipal {
 
     public Set<UUID> assignmentIds() {
         return assignmentIds;
+    }
+
+    /**
+     * The active position assignment on whose behalf this HTTP request performs
+     * responsibility-bearing business actions. Account-wide identity and scope
+     * remain represented by roles, permissions and assignmentIds.
+     */
+    public UUID businessActorAssignmentId() {
+        return businessActorAssignmentId;
     }
 
     public boolean hasTenantScope() {

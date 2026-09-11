@@ -70,6 +70,7 @@ import {
 } from './app/rolePresentationPolicy'
 import { resolveNotificationNavigation } from './app/notificationNavigation'
 import { useHashRoute } from './app/useHashRoute'
+import { loadExecutiveTasks } from './features/executiveTasks/api'
 import { PageAccessBoundary } from './shared/PageAccessBoundary'
 import { WecomTaskEntryPage } from './features/wecom/WecomTaskEntry'
 import { buildAppHashLocation, consumeWecomTaskEntry } from './features/wecom/entryRoute'
@@ -92,22 +93,23 @@ const DailyReportTemplateFeature = lazy(() => import('./features/dailyReportTemp
 const DailyOperationFeature = lazy(() => import('./features/dailyOperations/DailyOperationRoutes').then((module) => ({ default: module.DailyOperationRoutes })))
 const KpiFeature = lazy(() => import('./features/kpi/KpiRoutes').then((module) => ({ default: module.KpiRoutes })))
 const InvestmentFeature = lazy(() => import('./features/investments/InvestmentRoutes').then((module) => ({ default: module.InvestmentRoutes })))
+const ExecutiveTaskFeature = lazy(() => import('./features/executiveTasks/ExecutiveTaskRoutes').then((module) => ({ default: module.ExecutiveTaskRoutes })))
 const initialWecomTaskEntry = consumeWecomTaskEntry()
 const initialWecomBindingEntry = consumeWecomBindingEntry()
 
 const navigation: Array<{ id: AppRouteId; sectionId?: string; label: string; icon: string; group?: string; permissions?: string[] }> = [
   { id: 'workbench', label: '角色工作台', icon: '⌂' },
   { id: 'hotel-dashboard', label: '门店驾驶舱', icon: '▤', group: '管理驾驶舱', permissions: ['dashboard.hotel'] },
-  { id: 'operations-dashboard', label: '区域多门店', icon: '▥', group: '管理驾驶舱', permissions: ['dashboard.operations'] },
+  { id: 'operations-dashboard', label: '多门店经营', icon: '▥', group: '管理驾驶舱', permissions: ['dashboard.operations'] },
   { id: 'investments', label: '投资测算', icon: '¥', group: '投资决策', permissions: [permissionCodes.investment.read] },
   { id: 'work-packages', label: '工作包中心', icon: '▦', group: '标准与工作', permissions: ['work-package.read', 'work-package.manage', 'standard.read'] },
   { id: 'my-work', label: '我的工作', icon: '✓', permissions: ['work-record.read', 'work-record.submit', 'work.submit'] },
-  { id: 'team-work', label: '团队工作', icon: '◎', permissions: ['work-record.review'] },
+  { id: 'team-work', label: '团队工作', icon: '◎', permissions: [permissionCodes.workRecord.readTeam, 'work-record.review'] },
   { id: 'daily-reports-my', sectionId: 'daily-reports', label: '日报中心', icon: '▣', group: '日报与运营', permissions: [permissionCodes.dailyReport.readOwn, permissionCodes.dailyReport.submit, permissionCodes.dailyReport.readTeam] },
   { id: 'daily-operations', label: '日运营中心', icon: '◫', permissions: [permissionCodes.dailyOperations.readHotel, permissionCodes.dailyOperations.readCrossHotel] },
   { id: 'kpi-center', sectionId: 'kpi', label: 'KPI绩效中心', icon: '◎', group: '行政人事', permissions: [permissionCodes.kpi.scorecardReadOwn, permissionCodes.kpi.scorecardReadTeam, permissionCodes.kpi.scorecardReadAll, permissionCodes.kpi.templateRead] },
   { id: 'rules', label: '企业规则中心', icon: '◇', group: '管理闭环', permissions: ['rule.read', 'rule.manage'] },
-  { id: 'tasks', label: '任务中心', icon: '↗', permissions: ['task.read', 'task.act', 'task.review'] },
+  { id: 'tasks', label: '任务中心', icon: '↗', permissions: ['task.read', 'task.act', 'task.review', permissionCodes.executiveTask.read, permissionCodes.executiveTask.assign] },
   { id: 'evaluations', label: '标准评价', icon: '★', permissions: ['evaluation.read', 'evaluation.manual-review'] },
   { id: 'notifications', label: '通知中心', icon: '◉', permissions: ['notification.read'] },
   { id: 'templates', label: '集团模板配置', icon: '▧', group: '系统配置', permissions: ['template.manage'] },
@@ -120,7 +122,7 @@ const navigation: Array<{ id: AppRouteId; sectionId?: string; label: string; ico
 
 function sectionsForMobileTab(tab: Pick<MobilePresentationTab, 'slot'> & { target: AppRouteId }): readonly AppSectionId[] {
   if (tab.slot === 'secondary' && tab.target === 'tasks') return ['tasks', 'my-work']
-  if (tab.slot === 'profile') return ['all-functions']
+  if (tab.slot === 'profile') return [tab.target === 'account-self-service' ? 'account-self-service' : 'all-functions']
   if (tab.target === 'daily-reports-my' || tab.target === 'daily-reports-team') return ['daily-reports']
   if (tab.target === 'daily-operations') return ['daily-operations']
   if (tab.target === 'kpi-center') return ['kpi']
@@ -148,6 +150,7 @@ const statusText: Record<string, string> = {
   AWAITING_REVIEW: '待验收', REWORK: '返工中', CANCELLED: '已取消',
   PASS: '通过', WARNING: '预警', FAIL: '不通过', PENDING_MANUAL: '待人工', PENDING_AI: '待AI',
   ON_TIME: '正常', DUE_SOON: '即将到期', HIGH: '高', URGENT: '紧急', NORMAL: '普通', LOW: '低',
+  CHAIRMAN_DIRECTIVE: '董事长交办', WORK_PLAN: '工作计划生成', MANUAL: '人工创建',
 }
 
 function formatDate(value?: string, includeTime = true) {
@@ -195,17 +198,21 @@ function Metric({ label: title, value, hint, tone = 'blue', onClick }: { label: 
     : <article className={`metric ${tone}`}>{content}</article>
 }
 
-function Workbench({ identity, permissions, go }: { identity: RoleContext; permissions: string[]; go: Navigate }) {
-  const hasAssignment = Boolean(identity.assignmentId)
+function Workbench({ identity, permissions, executiveTasksEnabled, go }: { identity: RoleContext; permissions: string[]; executiveTasksEnabled: boolean; go: Navigate }) {
+  const hasAssignment = Boolean(identity.businessActorAssignmentId)
   const allows = (permission: string) => permissions.includes('*') || permissions.includes(permission)
+  const isChairman = identity.roleCode === 'GROUP_CHAIRMAN'
+  const canReadExecutiveTasks = isChairman && executiveTasksEnabled && hasAssignment && allows(permissionCodes.executiveTask.read)
   const canReadOwnWork = hasAssignment && (allows('work-record.read') || allows('work-record.submit') || allows('work.submit'))
-  const canReadTeamWork = allows('work-record.review')
-  const canReadTasks = allows('task.read') || allows('task.act') || allows('task.review')
+  const canReadTeamWork = allows(permissionCodes.workRecord.readTeam) || allows('work-record.review')
+  const canReadTasks = isChairman ? canReadExecutiveTasks : allows('task.read') || allows('task.act') || allows('task.review')
   const canReadNotifications = allows('notification.read')
-  const canReview = allows('task.review')
+  const canReview = !isChairman && allows('task.review')
   const primaryTaskView = hasAssignment ? 'mine' : 'team'
   const myWork = useResource(`${identity.key}:my-work:${canReadOwnWork}`, () => canReadOwnWork ? loadMyWork(identity) : Promise.resolve({ data: [], source: 'api' as const }), [], 30_000)
-  const tasks = useResource(`${identity.key}:tasks:${canReadTasks}`, () => canReadTasks ? loadTasks(identity, { view: primaryTaskView }) : Promise.resolve({ data: [], source: 'api' as const }), [], 15_000)
+  const tasks = useResource(`${identity.key}:tasks:${canReadTasks}:${isChairman}`, () => canReadTasks
+    ? isChairman ? loadExecutiveTasks(identity) : loadTasks(identity, { view: primaryTaskView })
+    : Promise.resolve({ data: [], source: 'api' as const }), [], 15_000)
   const reviewTaskResource = useResource(`${identity.key}:review-tasks:${canReview}`, () => canReview ? loadTasks(identity, { view: 'review' }) : Promise.resolve({ data: [], source: 'api' as const }), [], 15_000)
   const notices = useResource(`${identity.key}:notices:${canReadNotifications}`, () => canReadNotifications ? loadNotifications(identity) : Promise.resolve({ data: [], source: 'api' as const }), [], 15_000)
   const loading = myWork.loading || tasks.loading || reviewTaskResource.loading || notices.loading
@@ -227,6 +234,7 @@ function Workbench({ identity, permissions, go }: { identity: RoleContext; permi
       <section className="metrics-grid">
         {(canReadOwnWork || canReadTeamWork) && <Metric label={hasAssignment ? '今日待完成' : '岗位待办'} value={pendingWork.length} hint={hasAssignment ? `当前任职工作 ${scopedWork.length} 项` : '管理账号查看授权团队工作'} onClick={() => go(hasAssignment ? 'my-work' : 'team-work', { status: 'PENDING_WORK' })} />}
         {canReadTasks && <Metric label="执行中任务" value={activeTasks.length} hint={`${scopedTasks.filter((x) => x.slaStatus === 'OVERDUE').length} 项已逾期`} tone="teal" onClick={() => go('tasks', { view: primaryTaskView, status: 'ACTIVE' })} />}
+        {isChairman && canReadTasks && <Metric label="待我验收" value={scopedTasks.filter((item) => ['RESULT_SUBMITTED', 'AWAITING_REVIEW'].includes(item.status) && item.reviewerAssignmentId === identity.businessActorAssignmentId && item.creationSource === 'CHAIRMAN_DIRECTIVE').length} hint="仅验收本人交办的高管任务" tone="gold" onClick={() => go('tasks')} />}
         {canReview && <Metric label="待我验收" value={reviewTasks.length} hint="有标准按标准评价，无标准由验收人人工判定" tone="gold" onClick={() => go('tasks', { view: 'review' })} />}
         {canReadNotifications && <Metric label="未读通知" value={unread.length} hint="任务、逾期与升级提醒" tone="violet" onClick={() => go('notifications', { unread: 'true' })} />}
       </section>
@@ -342,10 +350,10 @@ function WorkRecordDialog({ item, identity, onClose, onSaved }: { item: WorkExpe
     finally { setSaving(undefined) }
   }
   const addSupplement = async () => {
-    if (!existing || !identity.assignmentId || !supplement.trim()) return
+    if (!existing || !identity.businessActorAssignmentId || !supplement.trim()) return
     setSaving('supplement'); setMessage(undefined)
     try {
-      await addWorkRecordSupplement(identity, existing.id, identity.assignmentId, supplement)
+      await addWorkRecordSupplement(identity, existing.id, identity.businessActorAssignmentId, supplement)
       const refreshed = await loadWorkRecord(identity, existing.id, existing)
       setExisting(refreshed.data); setSupplement(''); onSaved()
     } catch (error) { setMessage(error instanceof Error ? error.message : '补充说明失败') }
@@ -519,9 +527,9 @@ function TaskDetail({ initial, identity, permissions, onClose, onChanged }: { in
   const [busy, setBusy] = useState<string>()
   const [error, setError] = useState<string>()
   const [evidenceFiles, setEvidenceFiles] = useState<File[]>([])
-  const isAssignee = Boolean(identity.assignmentId && identity.assignmentId === task.assigneeAssignmentId)
-  const isReviewer = Boolean(identity.assignmentId && identity.assignmentId === task.reviewerAssignmentId)
-  const canEditEvidence = Boolean(identity.assignmentId && identity.assignmentId === task.assigneeAssignmentId && ['IN_PROGRESS', 'REWORK'].includes(task.status))
+  const isAssignee = Boolean(identity.businessActorAssignmentId && identity.businessActorAssignmentId === task.assigneeAssignmentId)
+  const isReviewer = Boolean(identity.businessActorAssignmentId && identity.businessActorAssignmentId === task.reviewerAssignmentId)
+  const canEditEvidence = Boolean(identity.businessActorAssignmentId && identity.businessActorAssignmentId === task.assigneeAssignmentId && ['IN_PROGRESS', 'REWORK'].includes(task.status))
   const allowedActions = (actionsByStatus[task.status] ?? []).filter((action) => {
     if (task.status === 'RESULT_SUBMITTED' && task.standardVersionId) return false
     if (['approve', 'rework', 'reject'].includes(action.command)) return isReviewer && permissions.includes('task.review')
@@ -532,7 +540,7 @@ function TaskDetail({ initial, identity, permissions, onClose, onChanged }: { in
     setBusy(command); setError(undefined)
     try {
       await apiCommand(`/tasks/${task.id}/actions/${command}`, identity, {
-        actorAssignmentId: identity.assignmentId,
+        actorAssignmentId: identity.businessActorAssignmentId,
         payload: { remark, ...(command === 'submit-result' ? { result: { summary: remark } } : {}) },
       }, task.version)
       setRemark(''); await resource.reload(); onChanged()
@@ -548,10 +556,10 @@ function TaskDetail({ initial, identity, permissions, onClose, onChanged }: { in
     finally { setBusy(undefined) }
   }
   const uploadEvidence = async () => {
-    if (!identity.assignmentId || !evidenceFiles.length) return
+    if (!identity.businessActorAssignmentId || !evidenceFiles.length) return
     setBusy('upload-evidence'); setError(undefined)
     try {
-      for (const file of evidenceFiles) await uploadTaskEvidence(identity, task.id, identity.assignmentId, file)
+      for (const file of evidenceFiles) await uploadTaskEvidence(identity, task.id, identity.businessActorAssignmentId, file)
       setEvidenceFiles([]); await resource.reload(); onChanged()
     } catch (reason) { setError(reason instanceof Error ? reason.message : '执行证据上传失败') }
     finally { setBusy(undefined) }
@@ -561,18 +569,18 @@ function TaskDetail({ initial, identity, permissions, onClose, onChanged }: { in
     catch (reason) { setError(reason instanceof Error ? reason.message : '执行证据打开失败') }
   }
   const removeEvidence = async (evidenceId: string) => {
-    if (!identity.assignmentId) return
+    if (!identity.businessActorAssignmentId) return
     setBusy(`delete:${evidenceId}`); setError(undefined)
-    try { await deleteTaskEvidence(identity, task.id, evidenceId, identity.assignmentId); await resource.reload(); onChanged() }
+    try { await deleteTaskEvidence(identity, task.id, evidenceId, identity.businessActorAssignmentId); await resource.reload(); onChanged() }
     catch (reason) { setError(reason instanceof Error ? reason.message : '执行证据删除失败') }
     finally { setBusy(undefined) }
   }
   return <div className="drawer-backdrop" role="presentation"><aside className="drawer" role="dialog" aria-modal="true">
     <header><div><span className="panel-kicker">TASK DETAIL</span><h2>{task.title}</h2><small>{task.code}</small></div><button className="close" onClick={onClose}>×</button></header>
     <div className="drawer-body"><div className="task-summary"><span><small>任务状态</small><Status value={task.status} /></span><span><small>SLA状态</small><Status value={task.slaStatus} /></span><span><small>优先级</small><Status value={task.priority} /></span></div>
-      <dl><div><dt>目标组织</dt><dd>{task.targetOrgName}</dd></div><div><dt>负责人</dt><dd>{task.assigneeName}</dd></div><div><dt>验收人</dt><dd>{task.reviewerName}</dd></div><div><dt>截止时间</dt><dd>{formatDate(task.dueAt)}</dd></div><div><dt>来源</dt><dd>{task.sourceTitle ?? label(task.sourceType)}</dd></div></dl>
+      <dl><div><dt>目标组织</dt><dd>{task.targetOrgName}</dd></div><div><dt>负责人</dt><dd>{task.assigneeName}</dd></div><div><dt>验收人</dt><dd>{task.reviewerName}</dd></div><div><dt>截止时间</dt><dd>{formatDate(task.dueAt)}</dd></div><div><dt>来源</dt><dd>{task.creationSource ? label(task.creationSource) : task.sourceTitle ?? label(task.sourceType)}</dd></div></dl>
       <section className="detail-section"><h3>执行要求</h3><p>{task.description ?? '任务来源已记录，执行结果需提交结构化说明和证据。'}</p></section>
-      <section className="detail-section"><h3>执行证据</h3>{task.evidence?.length ? <div className="attachment-list">{task.evidence.map((evidence) => <span className="evidence-chip" key={evidence.id}><button className="secondary" disabled={!evidence.objectKey} onClick={() => void previewEvidence(evidence.id)}>{evidence.originalName || label(evidence.evidenceType)} · {evidence.scanStatus}</button>{canEditEvidence && evidence.submittedByAssignmentId === identity.assignmentId && <button className="text-action danger" disabled={busy === `delete:${evidence.id}`} onClick={() => void removeEvidence(evidence.id)}>删除</button>}</span>)}</div> : <p className="muted">尚未上传图片或文档证据。</p>}{canEditEvidence && <div className="evidence-uploader"><input type="file" multiple accept=".jpg,.jpeg,.png,.pdf,.docx,.xlsx" onChange={(event) => setEvidenceFiles(Array.from(event.target.files ?? []).slice(0, 10))} /><button className="secondary" disabled={!!busy || !evidenceFiles.length} onClick={() => void uploadEvidence()}>{busy === 'upload-evidence' ? '上传中…' : `上传证据${evidenceFiles.length ? `（${evidenceFiles.length}）` : ''}`}</button><small>支持图片、PDF、Word、Excel；单文件不超过20MB。</small></div>}</section>
+      <section className="detail-section"><h3>执行证据</h3>{task.evidence?.length ? <div className="attachment-list">{task.evidence.map((evidence) => <span className="evidence-chip" key={evidence.id}><button className="secondary" disabled={!evidence.objectKey} onClick={() => void previewEvidence(evidence.id)}>{evidence.originalName || label(evidence.evidenceType)} · {evidence.scanStatus}</button>{canEditEvidence && evidence.submittedByAssignmentId === identity.businessActorAssignmentId && <button className="text-action danger" disabled={busy === `delete:${evidence.id}`} onClick={() => void removeEvidence(evidence.id)}>删除</button>}</span>)}</div> : <p className="muted">尚未上传图片或文档证据。</p>}{canEditEvidence && <div className="evidence-uploader"><input type="file" multiple accept=".jpg,.jpeg,.png,.pdf,.docx,.xlsx" onChange={(event) => setEvidenceFiles(Array.from(event.target.files ?? []).slice(0, 10))} /><button className="secondary" disabled={!!busy || !evidenceFiles.length} onClick={() => void uploadEvidence()}>{busy === 'upload-evidence' ? '上传中…' : `上传证据${evidenceFiles.length ? `（${evidenceFiles.length}）` : ''}`}</button><small>支持图片、PDF、Word、Excel；单文件不超过20MB。</small></div>}</section>
       {!!allowedActions.length && <section className="action-box"><label>处理说明<textarea rows={3} value={remark} onChange={(event) => setRemark(event.target.value)} placeholder="填写执行结果、验收意见或返工原因" /></label>{error && <div className="inline-error">{error}</div>}<div>{allowedActions.map((action) => <button className={action.tone === 'danger' ? 'danger-button' : 'primary'} disabled={!!busy || !remark.trim()} onClick={() => run(action.command)} key={action.command}>{busy === action.command ? '处理中…' : action.label}</button>)}</div></section>}
       {task.status === 'RESULT_SUBMITTED' && task.standardVersionId && isReviewer && permissions.includes('evaluation.manual-review') && <section className="action-box"><h3>任务结果标准评价</h3><p className="muted">系统使用任务创建时冻结的标准版本评价执行结果；评价完成后任务进入待验收状态。</p>{error && <div className="inline-error">{error}</div>}<div><button className="primary" disabled={!!busy} onClick={evaluateResult}>{busy === 'evaluate-result' ? '评价中…' : '按绑定标准评价结果'}</button></div></section>}
       <section className="detail-section"><h3>不可变时间线</h3><div className="timeline">{task.timeline?.length ? task.timeline.map((item) => <div key={item.id}><i /><span><strong>{label(item.toStatus)}</strong><small>{item.actorName} · {formatDate(item.occurredAt)}</small>{item.remark && <p>{item.remark}</p>}</span></div>) : <p className="muted">暂无流转记录。</p>}</div></section>
@@ -585,7 +593,7 @@ const taskViews = ['mine', 'team', 'review'] as const
 function Tasks({ identity, permissions, routeParams, go }: { identity: RoleContext; permissions: string[]; routeParams: RouteParams; go: Navigate }) {
   const requestedView = taskViews.includes(routeParams.view as typeof taskViews[number])
     ? routeParams.view as typeof taskViews[number]
-    : identity.assignmentId ? 'mine' : 'team'
+    : identity.businessActorAssignmentId ? 'mine' : 'team'
   const [taskView, setTaskView] = useState<typeof taskViews[number]>(requestedView)
   useEffect(() => setTaskView(requestedView), [requestedView])
   const statusFilter = (routeParams.status || 'ALL').toUpperCase()
@@ -768,6 +776,22 @@ function ChangePasswordDialog({ identity, onClose, onChanged }: { identity: Role
   </form></div>
 }
 
+function AccountSelfService({ roleLabel, orgName, onChangePassword, onLogout }: {
+  roleLabel: string
+  orgName: string
+  onChangePassword?: () => void
+  onLogout?: () => void
+}) {
+  return <section className="all-functions-page">
+    <header><h1>我的</h1><p>仅提供当前账号自助功能，不展示管理后台或全部功能目录。</p><div className="mobile-identity-summary"><strong>{roleLabel}</strong><span>{orgName}</span></div></header>
+    <div className="all-function-groups"><section><h2>账号与安全</h2><div className="all-function-list">
+      {onChangePassword && <button type="button" onClick={onChangePassword}><i aria-hidden="true">⌁</i><span>修改密码</span><b aria-hidden="true">›</b></button>}
+      {onLogout && <button type="button" onClick={onLogout}><i aria-hidden="true">↪</i><span>退出登录</span><b aria-hidden="true">›</b></button>}
+      {!onChangePassword && !onLogout && <div className="state-card"><strong>本地验收模式</strong><span>正式会话登录后可修改密码或退出。</span></div>}
+    </div></section></div>
+  </section>
+}
+
 function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
   const [route, navigate] = useHashRoute()
   const { view, params: routeParams, sectionId } = route
@@ -782,8 +806,8 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     permissions: [],
     tenantScope: false,
     orgScopes: identity.orgScopes,
-    assignments: bootstrapAssignments(authMode, identity.assignmentId ? [{
-      id: identity.assignmentId,
+    assignments: bootstrapAssignments(authMode, identity.businessActorAssignmentId ? [{
+      id: identity.businessActorAssignmentId,
       orgUnitId: identity.orgScopes[0] ?? '',
       orgName: identity.orgName,
       positionId: '',
@@ -792,14 +816,16 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       primary: true,
       assignmentType: 'PERMANENT',
     }] : []),
+    businessActorAssignmentId: undefined,
+    capabilities: { groupManagement: { workPlansEnabled: false, executiveTasksEnabled: false } },
   }), [identity])
   const me = useResource(`${identity.key}:me`, () => loadIdentity(identity, fallbackIdentity), fallbackIdentity)
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState(() => bootstrapAssignmentId(authMode, identity.assignmentId))
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState(() => bootstrapAssignmentId(authMode, identity.businessActorAssignmentId))
   const [changingPassword, setChangingPassword] = useState(false)
   const compatibleAssignments = useMemo(() => me.data.assignments, [me.data.assignments])
   useEffect(() => {
     const preferred = compatibleAssignments.find((item) => item.primary) ?? compatibleAssignments[0]
-    setSelectedAssignmentId(preferred?.id ?? bootstrapAssignmentId(authMode, identity.assignmentId))
+    setSelectedAssignmentId(preferred?.id ?? bootstrapAssignmentId(authMode, identity.businessActorAssignmentId))
   }, [identity.key, compatibleAssignments])
   const selectedAssignment = compatibleAssignments.find((item) => item.id === selectedAssignmentId)
     ?? compatibleAssignments.find((item) => item.primary)
@@ -834,10 +860,11 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     actorId: me.data.accountId || identity.actorId,
     userName: me.data.displayName || identity.userName,
     employeeId: me.data.employeeId,
-    assignmentOrgUnitId: isFullAccountLevel ? undefined : selectedAssignment?.orgUnitId,
+    assignmentOrgUnitId: selectedAssignment?.orgUnitId,
     roleCode: isFullAccountLevel ? accountPresentationRoleCode : selectedAssignment?.positionCode ?? (me.data.primaryRoleCode || identity.roleCode),
     orgScopes: authMode === 'dev-header' && !me.data.orgScopes.length ? identity.orgScopes : me.data.orgScopes,
-    assignmentId: isFullAccountLevel ? undefined : selectedAssignment?.id ?? (authMode === 'dev-header' ? identity.assignmentId : undefined),
+    businessActorAssignmentId: selectedAssignment?.id
+      ?? (authMode === 'dev-header' ? identity.businessActorAssignmentId : undefined),
     label: isFullAccountLevel ? resolvedRoleContext?.label ?? identity.label : selectedAssignment?.positionName ?? resolvedRoleContext?.label ?? identity.label,
     orgName: isFullAccountLevel ? resolvedRoleContext?.orgName ?? identity.orgName : selectedAssignment?.orgName ?? resolvedRoleContext?.orgName ?? identity.orgName,
     focus: resolvedRoleContext?.focus ?? presentationPolicy.focus,
@@ -864,13 +891,19 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
   )
   const unreadCount = unreadResource.data.filter((item) => !item.readAt).length
   const pilotDemoMode = demoFallbackEnabled && me.source === 'demo'
+  const isChairmanContext = presentationRoleCode === 'GROUP_CHAIRMAN'
+  const executiveTasksEnabled = me.data.capabilities.groupManagement.executiveTasksEnabled
   const permissionVisibleNavigation = useMemo(() => navigation.filter((item) => {
-    if (item.id === 'my-work' && !activeIdentity.assignmentId) return false
+    if (item.id === 'my-work' && !activeIdentity.businessActorAssignmentId) return false
+    if (item.id === 'tasks' && isChairmanContext) {
+      return executiveTasksEnabled && Boolean(activeIdentity.businessActorAssignmentId) &&
+        (activePermissions.includes('*') || activePermissions.includes(permissionCodes.executiveTask.read) || activePermissions.includes(permissionCodes.executiveTask.assign))
+    }
     return !item.permissions?.length ||
       (demoFallbackEnabled && me.source === 'demo' && !isDailyFeatureRoute(item.id) && !isInvestmentFeatureRoute(item.id)) ||
       activePermissions.includes('*') ||
       item.permissions.some((permission) => activePermissions.includes(permission))
-  }), [activeIdentity.assignmentId, activePermissions, me.source])
+  }), [activeIdentity.businessActorAssignmentId, activePermissions, executiveTasksEnabled, isChairmanContext, me.source])
   const visibleNavigation = useMemo(
     () => applyPublishedModuleVisibility(
       permissionVisibleNavigation,
@@ -885,11 +918,11 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       || activePermissions.includes(permissionCodes.dailyReport.readTeam)
       || activePermissions.includes(permissionCodes.dailyReport.reviewException)
       || activePermissions.includes(permissionCodes.dailyReport.reviewCorrection)
-    const canUseOwnReport = Boolean(activeIdentity.assignmentId) &&
+    const canUseOwnReport = Boolean(activeIdentity.businessActorAssignmentId) &&
       (activePermissions.includes('*') || activePermissions.includes(permissionCodes.dailyReport.readOwn) || activePermissions.includes(permissionCodes.dailyReport.submit))
     return resolveDailyReportsTarget({
       roleCode: presentationRoleCode,
-      hasAssignment: Boolean(activeIdentity.assignmentId),
+      hasAssignment: Boolean(activeIdentity.businessActorAssignmentId),
       canUseOwnReport,
       canUseTeamReport,
     })
@@ -899,7 +932,8 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     const target = presentationPolicy.mobileTabs[0]?.target ?? 'workbench'
     if (target !== 'workbench' && visibleNavigation.some((item) => item.id === target)) navigate(navigationTarget(target))
   }, [me.error, me.loading, navigate, presentationPolicy, route.explicit, view, visibleNavigation])
-  const routePresentationAllowed = !useRoleDefaultsFallback
+  const routePresentationAllowed = (view === 'account-self-service' && isChairmanContext)
+    || !useRoleDefaultsFallback
     || isRouteAllowedByRoleDefaults(presentationRoleCode, view, true)
   const page = useMemo(() => {
     if (authMode === 'bearer' && (me.loading || me.error)) {
@@ -936,7 +970,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     }
     let legacyPage: React.ReactNode
     switch (view) {
-      case 'workbench': legacyPage = <Workbench identity={activeIdentity} permissions={activePermissions} go={navigate} />; break
+      case 'workbench': legacyPage = <Workbench identity={activeIdentity} permissions={activePermissions} executiveTasksEnabled={executiveTasksEnabled} go={navigate} />; break
       case 'all-functions': legacyPage = <AllFunctionsPage
         items={visibleNavigation}
         roleLabel={activeIdentity.label}
@@ -946,13 +980,16 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
         onChangePassword={authMode === 'bearer' ? () => setChangingPassword(true) : undefined}
         onLogout={authMode === 'bearer' ? onLogout : undefined}
       />; break
+      case 'account-self-service': legacyPage = <AccountSelfService roleLabel={activeIdentity.label} orgName={activeIdentity.orgName} onChangePassword={authMode === 'bearer' ? () => setChangingPassword(true) : undefined} onLogout={authMode === 'bearer' ? onLogout : undefined} />; break
       case 'hotel-dashboard': legacyPage = <HotelDashboardPage identity={activeIdentity} routeParams={routeParams} go={navigate} />; break
       case 'operations-dashboard': legacyPage = <OperationsDashboardPage identity={activeIdentity} />; break
       case 'work-packages': legacyPage = <WorkPackageCenter identity={activeIdentity} permissions={activePermissions} />; break
       case 'my-work': legacyPage = <MyWork identity={activeIdentity} routeParams={routeParams} go={navigate} />; break
       case 'team-work': legacyPage = <TeamWork identity={activeIdentity} permissions={activePermissions} routeParams={routeParams} />; break
       case 'rules': legacyPage = <Rules identity={activeIdentity} permissions={activePermissions} />; break
-      case 'tasks': legacyPage = <Tasks identity={activeIdentity} permissions={activePermissions} routeParams={routeParams} go={navigate} />; break
+      case 'tasks': legacyPage = isChairmanContext && executiveTasksEnabled
+        ? <Suspense fallback={<div className="state-card"><div className="spinner" /><strong>正在加载董事长任务模块</strong></div>}><ExecutiveTaskFeature identity={activeIdentity} grantedPermissions={activePermissions} routeParams={routeParams} go={navigate} /></Suspense>
+        : <Tasks identity={activeIdentity} permissions={activePermissions} routeParams={routeParams} go={navigate} />; break
       case 'evaluations': legacyPage = <Evaluations identity={activeIdentity} routeParams={routeParams} go={navigate} />; break
       case 'notifications': legacyPage = <Notifications identity={activeIdentity} permissions={activePermissions} routeParams={routeParams} go={navigate} />; break
       case 'templates': legacyPage = <EnterpriseTemplateCenter identity={activeIdentity} permissions={activePermissions} />; break
@@ -969,7 +1006,9 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       />; break
     }
     const routeAccess = navigation.find((item) => item.id === view)
-    const contextAllowed = (view !== 'my-work' || Boolean(activeIdentity.assignmentId)) && routePresentationAllowed
+    const chairmanTaskAllowed = view !== 'tasks' || !isChairmanContext || (executiveTasksEnabled && Boolean(activeIdentity.businessActorAssignmentId))
+    const accountSelfServiceAllowed = view !== 'account-self-service' || isChairmanContext
+    const contextAllowed = (view !== 'my-work' || Boolean(activeIdentity.businessActorAssignmentId)) && chairmanTaskAllowed && accountSelfServiceAllowed && routePresentationAllowed
     const boundaryPermissions = demoFallbackEnabled && me.source === 'demo' ? ['*'] : activePermissions
     return <PageAccessBoundary
       permissions={boundaryPermissions}
@@ -978,11 +1017,11 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     >
       {legacyPage}
     </PageAccessBoundary>
-  }, [view, routeParams, activeIdentity, activePermissions, me.error, me.loading, presentationRoleCode, routePresentationAllowed, visibleNavigation])
+  }, [view, routeParams, activeIdentity, activePermissions, executiveTasksEnabled, isChairmanContext, me.error, me.loading, presentationRoleCode, routePresentationAllowed, visibleNavigation])
   const mobileNavigationItems = useMemo(() => {
     const visibleIds = new Set(visibleNavigation.map((item) => item.id))
     const resolveMobileTarget = (tab: MobilePresentationTab): AppRouteId | undefined => {
-      if (tab.target === 'all-functions') return tab.target
+      if (tab.target === 'all-functions' || tab.target === 'account-self-service') return tab.target
       if (tab.target === 'workbench' && visibleIds.has('workbench')) return tab.target
       if (tab.target === 'daily-reports-my' && visibleIds.has('daily-reports-my')) return navigationTarget(tab.target)
       if (visibleIds.has(tab.target)) return navigationTarget(tab.target)
@@ -1004,7 +1043,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
         ...(tab.slot === 'notifications' ? { badge: 'unread' as const } : {}),
       }
     }) as unknown as MobileNavigationItems
-  }, [activeIdentity.assignmentId, activePermissions, presentationPolicy, visibleNavigation])
+  }, [activeIdentity.businessActorAssignmentId, activePermissions, presentationPolicy, visibleNavigation])
   const changeRole = (key: string) => {
     const next = roleContexts.find((role) => role.key === key)
     if (!next) return
@@ -1020,7 +1059,7 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
     </aside>
     <main><header className="topbar"><div className="mobile-top-brand" aria-label={product.name}><span>四</span></div><div className={`connection ${me.error ? 'offline' : pilotDemoMode ? 'demo' : ''}`}><span className="live-dot" />{pilotDemoMode ? 'Pilot 演示数据' : me.error ? '身份接口异常' : '服务端权限已解析'}<small>{pilotDemoMode ? '仅用于界面与流程走查，不代表真实业务数据或权限' : authMode === 'dev-header' ? '本地验收账号 · 权限由数据库决定' : 'JWT/SSO 会话身份'}</small></div><span className="pilot-badge">{product.editionLabel}</span>
       {authMode === 'dev-header' && <label className="context-select account-context"><span>验收账号</span><select value={identity.key} onChange={(event) => changeRole(event.target.value)}>{roleContexts.map((role) => <option value={role.key} key={role.key}>{role.label} · {role.userName}</option>)}</select></label>}
-      {!isFullAccountLevel && !!compatibleAssignments.length && <label className="context-select assignment-context"><span>当前任职</span><select value={selectedAssignment?.id ?? ''} onChange={(event) => setSelectedAssignmentId(event.target.value)}>{compatibleAssignments.map((assignment) => <option value={assignment.id} key={assignment.id}>{assignment.positionName} · {assignment.orgName}{assignment.primary ? '（主岗）' : ''}</option>)}</select></label>}
+      {!!compatibleAssignments.length && <label className="context-select assignment-context"><span>业务任职</span><select value={selectedAssignment?.id ?? ''} onChange={(event) => setSelectedAssignmentId(event.target.value)}>{compatibleAssignments.map((assignment) => <option value={assignment.id} key={assignment.id}>{assignment.positionName} · {assignment.orgName}{assignment.primary ? '（主岗）' : ''}</option>)}</select></label>}
       {isFullAccountLevel && <span className="mobile-current-context">{activeIdentity.label}</span>}
       {canReadSidebarNotifications && <button className="bell" onClick={() => navigate('notifications')} aria-label={unreadCount > 0 ? `消息，${unreadCount}条未读` : '消息'}>消息{unreadCount > 0 && <b>{unreadCount}</b>}</button>}
       <div className="user"><span>{activeIdentity.userName.slice(-1)}</span><div><strong>{activeIdentity.userName}</strong><small>{activeIdentity.label}</small></div></div>

@@ -55,10 +55,12 @@ export async function loadIdentity(identity: ApiIdentity, fallback: IdentitySnap
   return withFallback(async () => {
     // Bootstrap must not reuse the demo/default assignment. The server resolves
     // the real account first and returns its valid assignments for selection.
-    const raw = object(await apiRequest<unknown>('/iam/me', { ...identity, assignmentId: undefined }))
+    const raw = object(await apiRequest<unknown>('/iam/me', { ...identity, businessActorAssignmentId: undefined }))
     const account = object(raw.account)
     const employee = object(raw.employee)
     const assignments = asList<JsonObject>(value(raw, 'positionAssignments', 'assignments'))
+    const capabilities = object(raw.capabilities)
+    const groupManagement = object(capabilities.groupManagement)
     const snapshot: IdentitySnapshot = {
       accountId: text(account, ['id'], identity.actorId),
       displayName: text(account, ['displayName', 'display_name'], '当前用户'),
@@ -81,6 +83,13 @@ export async function loadIdentity(identity: ApiIdentity, fallback: IdentitySnap
           authorizationScopeType: text(item, ['authorizationScopeType', 'authorization_scope_type'], '') as IdentitySnapshot['assignments'][number]['authorizationScopeType'] || undefined,
         }
       }),
+      businessActorAssignmentId: text(raw, ['businessActorAssignmentId'], '') || undefined,
+      capabilities: {
+        groupManagement: {
+          workPlansEnabled: Boolean(groupManagement.workPlansEnabled),
+          executiveTasksEnabled: Boolean(groupManagement.executiveTasksEnabled),
+        },
+      },
     }
     return snapshot
   }, fallback)
@@ -382,7 +391,7 @@ export async function createCorrectiveTask(identity: ApiIdentity, input: {
     headers: { 'Idempotency-Key': crypto.randomUUID() },
     body: JSON.stringify({
       ...input,
-      creatorAssignmentId: input.creatorAssignmentId ?? identity.assignmentId,
+      creatorAssignmentId: input.creatorAssignmentId ?? identity.businessActorAssignmentId,
       dispatchNow: true,
       sourceSnapshot: { source: 'TEAM_WORK_REVIEW', workRecordId: input.workRecordId },
     }),
@@ -549,6 +558,7 @@ function normalizeTask(item: JsonObject): ManagementTask {
       return raw && typeof raw === 'object' ? raw as Record<string, unknown> : undefined
     })(),
     sourceType: text(item, ['sourceType', 'source_type'], 'MANUAL'),
+    creationSource: text(item, ['creationSource', 'creation_source'], '') || undefined,
     sourceTitle: text(item, ['sourceTitle', 'source_title'], '') || undefined,
     description: text(item, ['description', 'requirement'], '') || undefined,
     dueAt: text(item, ['dueAt', 'due_at'], '') || undefined,

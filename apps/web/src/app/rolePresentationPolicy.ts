@@ -8,6 +8,9 @@ export type RolePresentationKey =
   | 'HOTEL_MANAGER'
   | 'REGIONAL_OPERATIONS'
   | 'HR'
+  | 'HR_ADMINISTRATION_SUPERVISOR'
+  | 'HR_ADMINISTRATION'
+  | 'GROUP_CHAIRMAN'
   | 'GROUP_VICE_PRESIDENT'
   | 'CEO'
   | 'PLATFORM_ADMIN'
@@ -32,6 +35,7 @@ export type MobilePresentationTarget =
   | 'investments'
   | 'notifications'
   | 'all-functions'
+  | 'account-self-service'
 
 export type RolePresentationPolicy = Readonly<{
   key: RolePresentationKey
@@ -57,6 +61,14 @@ const tabs = (
 ])
 
 const modules = (...ids: AppRouteId[]): readonly AppRouteId[] => Object.freeze(ids)
+
+const chairmanTabs = (): readonly MobilePresentationTab[] => Object.freeze([
+  Object.freeze({ slot: 'primary', label: '集团', target: 'workbench' }),
+  Object.freeze({ slot: 'secondary', label: '任务', target: 'tasks' }),
+  Object.freeze({ slot: 'domain', label: '经营', target: 'daily-operations' }),
+  Object.freeze({ slot: 'notifications', label: '消息', target: 'notifications' }),
+  Object.freeze({ slot: 'profile', label: '我的', target: 'account-self-service' }),
+])
 
 const POLICIES: Readonly<Record<RolePresentationKey, RolePresentationPolicy>> = Object.freeze({
   EMPLOYEE: Object.freeze({
@@ -132,6 +144,33 @@ const POLICIES: Readonly<Record<RolePresentationKey, RolePresentationPolicy>> = 
     ),
     mobileTabs: tabs('人事', 'organization', 'KPI', 'kpi-center'),
   }),
+  HR_ADMINISTRATION_SUPERVISOR: Object.freeze({
+    key: 'HR_ADMINISTRATION_SUPERVISOR',
+    knownRole: true,
+    focus: '行政人事团队工作、任务审核与计划审批',
+    desktopModuleIds: modules(
+      'workbench', 'team-work', 'tasks', 'notifications', 'all-functions',
+    ),
+    mobileTabs: tabs('工作台', 'workbench', '团队', 'team-work'),
+  }),
+  HR_ADMINISTRATION: Object.freeze({
+    key: 'HR_ADMINISTRATION',
+    knownRole: true,
+    focus: '行政人事任务执行与个人工作',
+    desktopModuleIds: modules('workbench', 'tasks', 'notifications', 'all-functions'),
+    mobileTabs: tabs('工作台', 'workbench', '任务', 'tasks'),
+  }),
+  GROUP_CHAIRMAN: Object.freeze({
+    key: 'GROUP_CHAIRMAN',
+    knownRole: true,
+    focus: '集团全局工作观察与总经理、副总经理任务派发',
+    desktopModuleIds: modules(
+      'workbench', 'hotel-dashboard', 'operations-dashboard', 'team-work',
+      'tasks', 'daily-reports-my', 'daily-operations', 'evaluations',
+      'notifications',
+    ),
+    mobileTabs: chairmanTabs(),
+  }),
   GROUP_VICE_PRESIDENT: Object.freeze({
     key: 'GROUP_VICE_PRESIDENT',
     knownRole: true,
@@ -199,17 +238,24 @@ const ROLE_ALIASES: Readonly<Record<Exclude<RolePresentationKey, 'GENERIC'>, rea
     'general-manager', '店长', '店总',
   ]),
   REGIONAL_OPERATIONS: Object.freeze([
-    'OTA_OPERATION_MANAGER', 'REGIONAL_OPERATION_MANAGER', 'REGIONAL_OPERATIONS',
-    'REGIONAL_MANAGER', 'regional-operations', 'OTA运营经理', '区域运营经理',
-    '区域/运营经理', '区域/运营', '区域经理',
+    'OTA_OPERATION_MANAGER', 'ota-operation-manager', 'OTA运营经理',
   ]),
   HR: Object.freeze([
-    'HR_KPI_ADMIN', 'HR_ADMIN', 'HUMAN_RESOURCES', 'hr', '人事', '行政人事', '行政人事KPI管理员',
+    'HR_KPI_ADMIN', 'hr-kpi-admin', '行政人事KPI管理员',
+  ]),
+  HR_ADMINISTRATION_SUPERVISOR: Object.freeze([
+    'HR_ADMINISTRATION_SUPERVISOR', 'hr-administration-supervisor', '行政人事主管',
+  ]),
+  HR_ADMINISTRATION: Object.freeze([
+    'HR_ADMINISTRATION', 'hr-administration', '行政人事',
+  ]),
+  GROUP_CHAIRMAN: Object.freeze([
+    'GROUP_CHAIRMAN', 'group-chairman', '集团董事长', '董事长',
   ]),
   GROUP_VICE_PRESIDENT: Object.freeze([
     'GROUP_VICE_PRESIDENT', 'GROUP_VP', 'group-vice-president', '集团副总',
   ]),
-  CEO: Object.freeze(['CEO', 'GROUP_CEO', 'ceo', '集团CEO']),
+  CEO: Object.freeze(['CEO', 'GROUP_CEO', 'GROUP_GENERAL_MANAGER', 'ceo', '集团CEO', '集团总经理']),
   PLATFORM_ADMIN: Object.freeze([
     'PLATFORM_ADMIN', 'GROUP_ADMIN', 'SYSTEM_ADMIN', 'platform-admin', '平台管理员', '系统管理员',
   ]),

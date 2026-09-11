@@ -215,11 +215,11 @@ function normalizeRevision(value: unknown): DailyReportRevision {
 
 function derivedActions(identity: ApiIdentity, summary: DailyReportSummary, currentRevision: DailyReportRevision): string[] {
   const source = summary as DailyReportSummary & { positionAssignmentId?: string }
-  const owner = Boolean(identity.assignmentId && source.positionAssignmentId === identity.assignmentId)
+  const owner = Boolean(identity.businessActorAssignmentId && source.positionAssignmentId === identity.businessActorAssignmentId)
   const actions: string[] = []
   if (owner && summary.status === 'DRAFT' && currentRevision.status === 'DRAFT') actions.push('EDIT', 'SUBMIT')
   if (owner && ['SUBMITTED', 'ARCHIVED'].includes(summary.status)) actions.push('REQUEST_CORRECTION')
-  const independentReviewer = Boolean(identity.assignmentId && currentRevision.status === 'SUBMITTED'
+  const independentReviewer = Boolean(identity.businessActorAssignmentId && currentRevision.status === 'SUBMITTED'
     && summary.status === 'SUBMITTED' && summary.reviewStatus === 'PENDING'
     && currentRevision.submittedByAccountId !== identity.actorId)
   if (independentReviewer) actions.push('REVIEW_APPROVE', 'REVIEW_REJECT')
@@ -284,8 +284,8 @@ function normalizeDetail(value: unknown, identity: ApiIdentity): DailyReportDeta
 }
 
 function requiredAssignmentId(identity: ApiIdentity): string {
-  if (!identity.assignmentId) throw new Error('请先选择当前任职后再执行该操作')
-  return identity.assignmentId
+  if (!identity.businessActorAssignmentId) throw new Error('请先选择当前任职后再执行该操作')
+  return identity.businessActorAssignmentId
 }
 
 export async function loadMyDailyReports(identity: ApiIdentity, signal: AbortSignal, filters: { businessDate?: string; status?: string; positionAssignmentId?: string } = {}) {

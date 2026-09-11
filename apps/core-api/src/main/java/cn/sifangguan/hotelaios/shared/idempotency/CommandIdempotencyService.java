@@ -2,16 +2,15 @@ package cn.sifangguan.hotelaios.shared.idempotency;
 
 import cn.sifangguan.hotelaios.shared.context.TenantPrincipal;
 import cn.sifangguan.hotelaios.shared.db.TenantDatabaseContext;
+import cn.sifangguan.hotelaios.shared.features.GroupManagementException;
 import cn.sifangguan.hotelaios.shared.security.AccessPolicy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -80,11 +79,11 @@ public class CommandIdempotencyService {
                         rs.getString("resource_type"), rs.getObject("resource_id", UUID.class),
                         (Integer) rs.getObject("response_status"), rs.getString("response_snapshot")));
         if (rows.size() != 1) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "幂等命令状态不可用");
+            throw GroupManagementException.conflict("IDEMPOTENCY_STATE_UNAVAILABLE", "幂等命令状态不可用");
         }
         ReservationRow existing = rows.getFirst();
         if (!existing.requestHash().equals(requestHash)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "相同Idempotency-Key对应了不同请求");
+            throw GroupManagementException.conflict("IDEMPOTENCY_KEY_REUSED", "相同Idempotency-Key对应了不同请求");
         }
         if ("SUCCEEDED".equals(existing.status())) {
             return new Reservation(existing.id(), true, existing.resourceType(), existing.resourceId(),
@@ -100,7 +99,7 @@ public class CommandIdempotencyService {
                     """, base(principal).addValue("id", existing.id()));
             return new Reservation(existing.id(), false, null, null, null, null);
         }
-        throw new ResponseStatusException(HttpStatus.CONFLICT, "相同幂等命令正在处理中");
+        throw GroupManagementException.conflict("IDEMPOTENCY_IN_PROGRESS", "相同幂等命令正在处理中");
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -126,7 +125,7 @@ public class CommandIdempotencyService {
                 .addValue("responseStatus", responseStatus)
                 .addValue("response", canonical(response)));
         if (changed != 1) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "幂等命令已被其他请求完成或失效");
+            throw GroupManagementException.conflict("IDEMPOTENCY_STATE_CONFLICT", "幂等命令已被其他请求完成或失效");
         }
     }
 

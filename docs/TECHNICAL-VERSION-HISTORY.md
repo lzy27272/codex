@@ -3,12 +3,12 @@
 | 项目 | 当前值 |
 |---|---|
 | 当前技术发行 | TECH-V0.1 |
-| 当前状态 | TECH-V0.1已发布；TECH-V0.2-PILOT.7仍在运行；TECH-V0.2-PILOT.8批次A/B已完成本地编码、功能关闭且未部署；TECH-V0.2正式发布门禁仍NO-GO |
+| 当前状态 | TECH-V0.1已发布；TECH-V0.2-PILOT.8批次A/B已部署至云端内部Pilot且功能关闭；TECH-V0.2正式发布门禁仍NO-GO |
 | 当前产品蓝图 | PRODUCT-V1.4 |
 | 当前API主版本 | API-V1（/api/v1） |
-| 当前OpenAPI契约 | 已发布0.1.0-sprint1；Pilot运行0.2.4-pilot.7；代码候选0.2.5-pilot.8 |
-| 当前数据库迁移 | 已发布DB-V4；当前代码候选基线包含Flyway V1—V39 |
-| 当前后端制品 | 运行0.2.0-pilot.7；代码候选0.2.0-pilot.8，未部署 |
+| 当前OpenAPI契约 | 已发布0.1.0-sprint1；云端Pilot运行0.2.5-pilot.8 |
+| 当前数据库迁移 | 已发布DB-V4；云端Pilot运行Flyway V39 |
+| 当前后端制品 | 云端内部Pilot运行0.2.0-pilot.8；新增能力关闭 |
 | 最后更新 | 2026-09-12 |
 
 ## 0. 文档职责
@@ -58,7 +58,7 @@
 | TECH-V0.2-PILOT.5 | 已由PILOT.6替代 / 保留为回滚历史 | 真实PostgreSQL、真实应用账号、组织岗位人员维护、七岗位专属工作包、真实填报、图片附件、团队权限及驾驶舱 | PRODUCT-V1.2 |
 | TECH-V0.2-PILOT.6 | 已由PILOT.7替代 / 保留为回滚历史 | 统一工作提交、多附件、任务下达与证据、CEO岗位工作/任务/门店驾驶舱模板治理 | PRODUCT-V1.2 |
 | TECH-V0.2-PILOT.7 | 内部修复版 / 技术与公网业务闭环PASS / 待持续门店试用 | 可点击角色工作台与驾驶舱、原子任务投递、任务读取隔离、自动刷新接收、无标准人工验收、全角色任务目标矩阵、UAT数据清理 | PRODUCT-V1.2 |
-| TECH-V0.2-PILOT.8（候选） | 批次A/B本地编码完成 / 功能关闭 / C—D未开始 / 未部署 | 已完成业务任职与V39底座，以及董事长受限交办、专用最小投影、验收/退回和前端入口；计划与提醒闭环待后续批次 | PRODUCT-V1.4 |
+| TECH-V0.2-PILOT.8 | 批次A/B已部署到云端内部Pilot / 功能关闭 / C—D未开始 | 已部署业务任职与V39底座，以及董事长受限交办、专用最小投影、验收/退回和前端入口；真实任职、能力启用、计划与提醒闭环待后续批次 | PRODUCT-V1.4 |
 | TECH-V0.2 | RC Final技术验证PASS / Release NO-GO / Unreleased | 标准→工作包→记录→评价→规则→任务→执行→验收闭环 | PRODUCT-V1.2 |
 | TECH-V0.3 | 预实施计划V1.1已输出 / 待技术冻结 / 未启动 / 开工前须按届时当前产品基线重评 | AI Gateway、工作/经营/点评/CEO Agent、AI简报和AI主动发现 | 原设计PRODUCT-V1.2；当前须重基线PRODUCT-V1.4 |
 | TECH-V0.4 | 建议阶段 | 绩效复盘、知识沉淀和标准优化建议 | PRODUCT-V1.2 |
@@ -409,6 +409,17 @@
 - 验证：详见批次B实施记录；功能关闭、身份错误、目标越权、伪造字段、非本人动作、幂等和事务原子性均有自动化证据。
 - 下一门禁：不自动进入批次C；工作计划、提醒Worker、真实人员映射、租户启用和部署仍需分别授权。
 - 依据：`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-BATCH-B-IMPLEMENTATION-REPORT.md`。
+
+### 5.26 TECH-V0.2-PILOT.8云端内部Pilot收口（2026-09-12）
+
+- 状态：BATCH A/B DEPLOYED / FEATURES OFF / C—D NOT STARTED；不改变TECH-V0.2正式发行NO-GO。
+- 版本：功能提交`e001c2ae2c58445bae553667301f0c691c2e7edf`已推送GitHub并首次成功激活；最终文档收口提交继续以同一构建、测试和门禁重部署，最终GitHub `main`与云端不可变release目录须保持一致。
+- 数据库：部署前生成加密备份并校验SHA-256；Flyway从V38升级至V39，JAR与数据库迁移版本一致，失败迁移数为0。
+- 制品：后端JAR、Web及部署脚本敏感扫描0命中、0错误；云端JAR和公网`index.html`哈希与本地部署包一致。
+- 运行：Core API与Caddy均为active，内网健康状态UP；未授权身份与高管交办接口均返回401；最近启动日志无warning级别事件。
+- 功能边界：云端没有`GROUP_MANAGEMENT_*`配置，三项能力使用默认false且租户白名单为空；V39未创建真实人员任职，区域经理继续冻结。
+- 公网：`https://www.sfgzt.cn`返回200；Microsoft Edge/Playwright桌面及移动端登录页、Pilot.8资源、表单交互、控制台与请求失败检查全部PASS。
+- 依据：`docs/TECH-V0.2-PILOT.8-CLOUD-DEPLOYMENT-REPORT.md`。
 
 ## 6. TECH-V0.3
 

@@ -17,14 +17,27 @@
 | 产品蓝图 | PRODUCT-V1.4 | PRODUCT-V1.4 | 产品为什么这样设计、管理链和领域边界 |
 | 技术发行 | TECH-V0.1 | TECH-V0.1 | 当前真正完成并验收的系统能力 |
 | API主版本 | API-V1 | /api/v1 | HTTP向后兼容边界 |
-| 数据库迁移 | DB-V4 | 已发布DB-V4；当前代码候选基线含Flyway V39 | 正式发布基线与当前代码迁移范围 |
-| OpenAPI契约 | 0.1.0-sprint1 | 已发布0.1.0-sprint1；Pilot运行0.2.4-pilot.7；代码候选0.2.5-pilot.8 | 当前已发布、运行与代码候选接口制品 |
+| 数据库迁移 | DB-V4 | 已发布DB-V4；云端内部Pilot运行Flyway V39 | 正式发布基线与当前Pilot迁移范围 |
+| OpenAPI契约 | 0.1.0-sprint1 | 已发布0.1.0-sprint1；云端Pilot运行0.2.5-pilot.8 | 当前已发布与内部Pilot接口制品 |
 
 禁止只写“V1.3”而不说明是PRODUCT、TECH、API还是数据库版本。
 
 ## Unreleased
 
 ### Added
+
+#### CHG-20260912-054：部署TECH-V0.2-PILOT.8批次A/B到云端内部Pilot
+
+- 日期：2026-09-12。
+- 状态：Unreleased / `TECH-V0.2-PILOT.8` BATCH A/B DEPLOYED / FEATURES OFF / C—D NOT STARTED。
+- 授权：产品负责人明确批准将收口提交推送到`lzy27272/codex`的`main`并部署到腾讯云`43.136.184.38`及`https://www.sfgzt.cn`。
+- GitHub：功能提交`e001c2ae2c58445bae553667301f0c691c2e7edf`已快进推送；最终文档收口提交完成后使用同一门禁重部署并核对GitHub与云端版本一致。
+- 数据库：部署前加密备份及SHA-256校验PASS；Flyway V38→V39 PASS，JAR/数据库均为39且失败迁移为0。
+- 制品：源码67文件、JAR、Web和部署脚本敏感扫描均为0命中、0错误；云端JAR和公网首页哈希与本地制品一致。
+- 运行：Core API/Caddy active、健康状态UP；未授权`/iam/me`及`/executive-tasks`返回401，最近启动日志0条warning。
+- 公网：桌面1440×900与移动390×844的Microsoft Edge/Playwright验收PASS；页面身份、非空渲染、Pilot.8资源、表单交互、控制台、页面异常及请求失败均正常。
+- 边界：云端未设置`GROUP_MANAGEMENT_*`变量，全部新增能力默认关闭；未创建真实人员任职，区域经理继续冻结，批次C/D未开始，TECH-V0.2正式发布状态仍为NO-GO。
+- 关联文档：`docs/TECH-V0.2-PILOT.8-CLOUD-DEPLOYMENT-REPORT.md`、`docs/tasks/GROUP-MANAGEMENT-ROLE-AND-WORK-PLAN-BATCH-B-IMPLEMENTATION-REPORT.md`。
 
 #### CHG-20260912-053：完成集团管理批次B董事长受限交办闭环
 

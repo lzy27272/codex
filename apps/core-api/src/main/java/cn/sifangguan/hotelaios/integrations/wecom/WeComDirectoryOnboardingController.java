@@ -97,6 +97,11 @@ public class WeComDirectoryOnboardingController {
         return administrationService.list(status);
     }
 
+    @PostMapping("/invitations")
+    public OpenInvitationResponse createOpenInvitation() {
+        return administrationService.createOpenInvitation();
+    }
+
     @PostMapping("/candidates/{candidateId}/approve")
     public ApprovalResponse approve(
             @PathVariable UUID candidateId,

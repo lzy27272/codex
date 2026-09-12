@@ -6,6 +6,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.net.URI;
+import java.time.OffsetDateTime;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -13,10 +15,37 @@ import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class WeComDirectoryOnboardingControllerTest {
+    @Test
+    void administratorCanCreateAnEmployeeSelfRegistrationInvitation() throws Exception {
+        WeComDirectoryOnboardingService employeeService = mock(WeComDirectoryOnboardingService.class);
+        WeComDirectoryOnboardingAdministrationService administrationService =
+                mock(WeComDirectoryOnboardingAdministrationService.class);
+        WeComDirectoryProperties properties = mock(WeComDirectoryProperties.class);
+        UUID candidateId = UUID.randomUUID();
+        when(administrationService.createOpenInvitation()).thenReturn(
+                new WeComDirectoryOnboardingModels.OpenInvitationResponse(
+                        candidateId,
+                        URI.create("https://www.sfgzt.cn/#/wecom-onboarding?token=one-time"),
+                        OffsetDateTime.parse("2026-09-12T15:00:00+08:00"),
+                        "WAITING_PROFILE", 0,
+                        "注册链接已生成，请让员工使用企业微信扫码或打开链接自行填写"));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new WeComDirectoryOnboardingController(
+                employeeService, administrationService, properties)).build();
+
+        mvc.perform(post("/api/v1/integrations/wecom/directory-onboarding/invitations"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.candidateId").value(candidateId.toString()))
+                .andExpect(jsonPath("$.status").value("WAITING_PROFILE"))
+                .andExpect(jsonPath("$.enrollmentUrl").value(
+                        "https://www.sfgzt.cn/#/wecom-onboarding?token=one-time"));
+    }
+
     @Test
     void oauthFailureRedirectsWithOnlyAnAllowlistedResultCode() throws Exception {
         WeComDirectoryOnboardingService employeeService = mock(WeComDirectoryOnboardingService.class);

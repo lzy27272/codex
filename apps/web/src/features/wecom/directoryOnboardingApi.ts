@@ -11,6 +11,7 @@ export type DirectoryOnboardingContext = {
   displayName: string
   loginName?: string
   requiresAccountRegistration: boolean
+  invitationSource?: 'DIRECTORY_EVENT' | 'MANUAL_LINK'
   hotels: DirectoryHotelOption[]
   rowVersion: number
 }
@@ -28,6 +29,7 @@ export type DirectoryCandidate = {
   requestedHotelName?: string
   requestedDepartmentName?: string
   requestedPositionName?: string
+  invitationSource?: 'DIRECTORY_EVENT' | 'MANUAL_LINK'
   status: DirectoryOnboardingStatus
   failureCode?: string
   invitationExpiresAt?: string
@@ -37,6 +39,14 @@ export type DirectoryCandidate = {
   suggestedAction?: string
   updatedAt: string
   rowVersion: number
+}
+export type DirectoryOpenInvitation = {
+  candidateId: string
+  enrollmentUrl: string
+  expiresAt: string
+  status: 'WAITING_PROFILE'
+  rowVersion: number
+  message: string
 }
 export type DirectoryApprovalResponse = {
   candidateId: string
@@ -115,6 +125,12 @@ export function submitDirectoryOnboarding(
 }
 
 const adminBase = '/integrations/wecom/directory-onboarding/candidates'
+
+export function createDirectoryOnboardingInvitation(identity: RoleContext) {
+  return apiRequest<DirectoryOpenInvitation>('/integrations/wecom/directory-onboarding/invitations', identity, {
+    method: 'POST',
+  })
+}
 
 export async function loadDirectoryCandidates(identity: RoleContext, status?: string): Promise<DirectoryCandidate[]> {
   const query = status ? `?status=${encodeURIComponent(status)}` : ''

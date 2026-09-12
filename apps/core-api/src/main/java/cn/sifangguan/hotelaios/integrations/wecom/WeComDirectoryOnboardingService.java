@@ -304,8 +304,7 @@ public class WeComDirectoryOnboardingService {
                             ? "OAUTH_PROVIDER_UNAVAILABLE" : "OAUTH_VERIFICATION_FAILED",
                     exception);
         }
-        URI result = isolatedTransaction.execute(status ->
-                completeOAuth(candidateId, codec.fingerprint(userId)));
+        URI result = isolatedTransaction.execute(status -> completeOAuth(candidateId, userId));
         if (result == null) {
             throw new OAuthCallbackFailure("OAUTH_IDENTITY_MISMATCH");
         }
@@ -360,6 +359,7 @@ public class WeComDirectoryOnboardingService {
         CandidateSession candidate = requireSession(sessionToken, false);
         return new OnboardingContext(candidate.id(), candidate.status(), candidate.displayName(),
                 candidate.requestedLoginName(), candidate.sourceAccountId() == null,
+                candidate.invitationSource(),
                 loadOptions(), candidate.rowVersion());
     }
 
@@ -803,19 +803,51 @@ public class WeComDirectoryOnboardingService {
         return id;
     }
 
-    URI completeOAuth(UUID candidateId, String observedFingerprint) {
+    URI completeOAuth(UUID candidateId, String observedUserId) {
         apply();
+        String userId = boundedSecret(observedUserId);
+        String observedFingerprint = codec.fingerprint(userId);
         List<OAuthCandidate> rows = jdbc.query("""
-                select id, user_id_fingerprint, source_account_id from wecom_person_onboarding
+                select id, user_id_fingerprint, source_account_id, invitation_source
+                from wecom_person_onboarding
                 where tenant_id = :tenantId and id = :id and status = 'WAITING_PROFILE'
                   and directory_status = 'ACTIVE' and invitation_expires_at > now()
                 for update
                 """, params().addValue("id", candidateId), (rs, rowNum) -> new OAuthCandidate(
                 rs.getObject("id", UUID.class), rs.getString("user_id_fingerprint"),
-                rs.getObject("source_account_id", UUID.class)));
+                rs.getObject("source_account_id", UUID.class),
+                rs.getString("invitation_source")));
         if (rows.size() != 1) throw new IllegalArgumentException("入职申请状态已变化");
         OAuthCandidate candidate = rows.getFirst();
-        if (!MessageDigest.isEqual(candidate.fingerprint().getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+        boolean manualLink = "MANUAL_LINK".equals(candidate.invitationSource());
+        if (manualLink) {
+            jdbc.queryForObject("""
+                    select pg_advisory_xact_lock(
+                        hashtext(cast(:tenantId as text)),
+                        hashtext(:corpId || ':' || :fingerprint))
+                    """, params().addValue("fingerprint", observedFingerprint), Object.class);
+            Integer duplicate = jdbc.queryForObject("""
+                    select count(*) from wecom_person_onboarding
+                    where tenant_id = :tenantId and corp_id = :corpId
+                      and id <> :id and user_id_fingerprint = :fingerprint
+                      and status in ('WAITING_PROFILE','PENDING_APPROVAL','CONFLICT')
+                    """, params().addValue("id", candidateId)
+                    .addValue("fingerprint", observedFingerprint), Integer.class);
+            if (duplicate != null && duplicate > 0) {
+                jdbc.update("""
+                        update wecom_person_onboarding
+                        set status = 'CANCELLED', invitation_token_hash = null,
+                            invitation_issued_at = null, invitation_expires_at = null,
+                            oauth_state_hash = null, browser_verifier_hash = null,
+                            provider_code_hash = null, failure_code = 'IDENTITY_ALREADY_PENDING',
+                            decision_reason = '该企业微信身份已有待处理入职申请',
+                            row_version = row_version + 1
+                        where tenant_id = :tenantId and id = :id
+                        """, params().addValue("id", candidateId));
+                return null;
+            }
+        } else if (!MessageDigest.isEqual(
+                candidate.fingerprint().getBytes(java.nio.charset.StandardCharsets.US_ASCII),
                 observedFingerprint.getBytes(java.nio.charset.StandardCharsets.US_ASCII))) {
             jdbc.update("""
                     update wecom_person_onboarding
@@ -857,11 +889,17 @@ public class WeComDirectoryOnboardingService {
                 update wecom_person_onboarding
                 set oauth_state_hash = null, browser_verifier_hash = null,
                     provider_code_hash = null, identity_verified_at = now(),
+                    user_id_fingerprint = case when :manualLink
+                        then :observedFingerprint else user_id_fingerprint end,
+                    user_id_ciphertext = case when :manualLink
+                        then :userIdCiphertext else user_id_ciphertext end,
                     exchange_code_hash = :exchangeHash, exchange_expires_at = :exchangeExpiresAt,
                     failure_code = null, row_version = row_version + 1
                 where tenant_id = :tenantId and id = :id
                 """, params().addValue("id", candidateId).addValue("exchangeHash", sha256(exchangeCode))
-                .addValue("exchangeExpiresAt", OffsetDateTime.now().plus(properties.exchangeTtl())));
+                .addValue("exchangeExpiresAt", OffsetDateTime.now().plus(properties.exchangeTtl()))
+                .addValue("manualLink", manualLink).addValue("observedFingerprint", observedFingerprint)
+                .addValue("userIdCiphertext", manualLink ? codec.encrypt(userId) : null));
         String base = properties.frontendBaseUrl().toString().replaceAll("/+$", "");
         return URI.create(base + "/#/wecom-onboarding?exchange_code=" + exchangeCode);
     }
@@ -881,7 +919,8 @@ public class WeComDirectoryOnboardingService {
         String suffix = lock ? " for update" : "";
         List<CandidateSession> rows = jdbc.query("""
                 select id, status, coalesce(requested_display_name, display_name) as display_name,
-                       requested_login_name, user_id_fingerprint, source_account_id, row_version
+                       requested_login_name, user_id_fingerprint, source_account_id,
+                       invitation_source, row_version
                 from wecom_person_onboarding
                 where tenant_id = :tenantId and corp_id = :corpId
                   and session_token_hash = :sessionHash and session_expires_at > now()
@@ -892,7 +931,8 @@ public class WeComDirectoryOnboardingService {
                         rs.getString("status"), rs.getString("display_name"),
                         rs.getString("requested_login_name"),
                         rs.getString("user_id_fingerprint"),
-                        rs.getObject("source_account_id", UUID.class), rs.getLong("row_version")));
+                        rs.getObject("source_account_id", UUID.class),
+                        rs.getString("invitation_source"), rs.getLong("row_version")));
         if (rows.size() != 1) throw new IllegalArgumentException("入职会话已过期或不可继续");
         return rows.getFirst();
     }
@@ -1322,6 +1362,7 @@ public class WeComDirectoryOnboardingService {
             String requestedLoginName,
             String fingerprint,
             UUID sourceAccountId,
+            String invitationSource,
             long rowVersion
     ) { }
     private record OpenCandidate(
@@ -1338,7 +1379,9 @@ public class WeComDirectoryOnboardingService {
             boolean eligibleForEvent,
             int lineageDepth
     ) { }
-    private record OAuthCandidate(UUID id, String fingerprint, UUID sourceAccountId) { }
+    private record OAuthCandidate(
+            UUID id, String fingerprint, UUID sourceAccountId, String invitationSource
+    ) { }
     private record ExpiredCandidate(UUID id, String fingerprint) { }
     private record OptionRow(
             UUID hotelId, String hotelName, UUID departmentId, String departmentName,

@@ -90,6 +90,7 @@ public class WeComDirectoryOnboardingAdministrationService {
                        coalesce(candidate.requested_display_name, candidate.display_name) as display_name,
                        candidate.requested_login_name,
                        candidate.onboarding_kind,
+                       candidate.invitation_source,
                        candidate.requested_org_unit_id,
                        hotel.name as requested_hotel_name,
                        department.name as requested_department_name,
@@ -132,18 +133,73 @@ public class WeComDirectoryOnboardingAdministrationService {
                     rs.getObject("id", UUID.class), mask(rs.getString("user_id_fingerprint")),
                     rs.getString("display_name"), rs.getString("requested_login_name"),
                     rs.getString("onboarding_kind"),
+                    rs.getString("invitation_source"),
                     rs.getObject("requested_org_unit_id", UUID.class),
                     rs.getString("requested_hotel_name"), rs.getString("requested_department_name"),
                     rs.getObject("requested_position_id", UUID.class),
                     rs.getString("requested_position_name"), candidateStatus,
                     failureCode, expiresAt, expiringSoon,
                     TECHNICAL_RETRY_FAILURES.contains(failureCode),
-                    "EXPIRED".equals(candidateStatus),
-                    suggestedAction(candidateStatus, failureCode, expiringSoon),
+                    "EXPIRED".equals(candidateStatus)
+                            && "DIRECTORY_EVENT".equals(rs.getString("invitation_source")),
+                    suggestedAction(candidateStatus, failureCode, expiringSoon,
+                            rs.getString("invitation_source")),
                     rs.getObject("updated_at", OffsetDateTime.class), rs.getLong("row_version")
             );
         });
         return new CandidateList(rows);
+    }
+
+    @Transactional
+    public OpenInvitationResponse createOpenInvitation() {
+        TenantPrincipal principal = prepare("wecom-binding.manage");
+        employeeService.expireDueInvitations();
+        Integer openInvitations = jdbc.queryForObject("""
+                select count(*) from wecom_person_onboarding
+                where tenant_id = :tenantId and corp_id = :corpId
+                  and invitation_source = 'MANUAL_LINK'
+                  and status = 'WAITING_PROFILE' and invitation_expires_at > now()
+                """, base(principal), Integer.class);
+        if (openInvitations != null && openInvitations >= 20) {
+            throw new IllegalArgumentException("当前已有较多未使用邀请，请等待过期或员工提交后再生成");
+        }
+
+        UUID candidateId = UUID.randomUUID();
+        String token = employeeService.newInvitationToken();
+        OffsetDateTime issuedAt = OffsetDateTime.now();
+        OffsetDateTime expiresAt = issuedAt.plus(properties.invitationTtl());
+        String placeholderFingerprint = WeComDirectorySecretCodec.sha256(
+                "manual-invitation:" + candidateId + ":" + token);
+        jdbc.update("""
+                insert into wecom_person_onboarding
+                    (id, tenant_id, corp_id, user_id_fingerprint, display_name,
+                     onboarding_kind, directory_status, status,
+                     invitation_token_hash, invitation_issued_at, invitation_expires_at,
+                     source_event_hash, last_event_at,
+                     invitation_source, invitation_created_by)
+                values
+                    (:id, :tenantId, :corpId, :fingerprint, '待员工填写',
+                     'NEW_MEMBER', 'ACTIVE', 'WAITING_PROFILE',
+                     :tokenHash, :issuedAt, :expiresAt,
+                     :sourceHash, :issuedAt,
+                     'MANUAL_LINK', :actorId)
+                """, base(principal).addValue("id", candidateId)
+                .addValue("fingerprint", placeholderFingerprint)
+                .addValue("tokenHash", WeComDirectorySecretCodec.sha256(token))
+                .addValue("issuedAt", issuedAt).addValue("expiresAt", expiresAt)
+                .addValue("sourceHash", WeComDirectorySecretCodec.sha256(
+                        "manual-invitation:" + candidateId)));
+        auditWriter.record("WECOM_OPEN_ONBOARDING_INVITATION_CREATED",
+                "WECOM_PERSON_ONBOARDING", candidateId, json(Map.of(
+                        "expiresAt", expiresAt.toString(),
+                        "invitationSource", "MANUAL_LINK",
+                        "employeeProfileProvidedByAdministrator", false,
+                        "tokenExposedInAudit", false
+                )));
+        return new OpenInvitationResponse(candidateId,
+                WeComDirectoryOnboardingService.invitationUri(properties.frontendBaseUrl(), token),
+                expiresAt, "WAITING_PROFILE", 0,
+                "注册链接已生成，请让员工使用企业微信扫码或打开链接自行填写");
     }
 
     @Transactional
@@ -261,7 +317,10 @@ public class WeComDirectoryOnboardingAdministrationService {
         if (!"ACTIVE".equals(candidate.directoryStatus())) {
             throw new IllegalArgumentException("企业微信成员当前非启用状态，不能生成邀请");
         }
-        String userId = codec.decrypt(required(candidate.userIdCiphertext(), "候选人身份已失效"));
+        boolean manualLink = "MANUAL_LINK".equals(candidate.invitationSource());
+        String userId = manualLink && candidate.userIdCiphertext() == null
+                ? null
+                : codec.decrypt(required(candidate.userIdCiphertext(), "候选人身份已失效"));
         String token = employeeService.newInvitationToken();
         OffsetDateTime issuedAt = OffsetDateTime.now();
         OffsetDateTime expiresAt = issuedAt.plus(properties.invitationTtl());
@@ -287,10 +346,14 @@ public class WeComDirectoryOnboardingAdministrationService {
                 .addValue("tokenHash", WeComDirectorySecretCodec.sha256(token))
                 .addValue("issuedAt", issuedAt).addValue("expiresAt", expiresAt));
         if (updated != 1) throw stale();
-        employeeService.deliverInvitationAfterCommit(candidate.id(), userId, token);
+        if (userId != null) {
+            employeeService.deliverInvitationAfterCommit(candidate.id(), userId, token);
+        }
         notifyGovernance(principal, candidate.id(), "WECOM_ONBOARDING_INVITATION_REISSUED",
                 "企业微信入职邀请已重新生成",
-                "旧链接已失效，新邀请仅通过企业微信应用消息发送，有效期120分钟。",
+                manualLink
+                        ? "旧链接已失效，请复制新的注册链接或二维码发送给员工。"
+                        : "旧链接已失效，新邀请仅通过企业微信应用消息发送，有效期120分钟。",
                 "invitation-reissued-" + (candidate.rowVersion() + 1));
         auditWriter.record("WECOM_ONBOARDING_INVITATION_REISSUED",
                 "WECOM_PERSON_ONBOARDING", candidate.id(), json(Map.of(
@@ -305,7 +368,9 @@ public class WeComDirectoryOnboardingAdministrationService {
                 )));
         return new InvitationActionResponse(candidate.id(), "WAITING_PROFILE", expiresAt,
                 candidate.rowVersion() + 1,
-                "新邀请已通过企业微信应用消息发送，旧链接已失效");
+                manualLink
+                        ? "新注册链接已生成，旧链接已失效"
+                        : "新邀请已通过企业微信应用消息发送，旧链接已失效");
     }
 
     @Transactional
@@ -773,7 +838,7 @@ public class WeComDirectoryOnboardingAdministrationService {
                 select id, status, display_name, requested_display_name,
                        requested_login_name, requested_password_hash,
                        user_id_fingerprint, user_id_ciphertext,
-                       onboarding_kind, source_binding_id, source_account_id,
+                       onboarding_kind, invitation_source, source_binding_id, source_account_id,
                        directory_status, failure_code, invitation_expires_at,
                        requested_org_unit_id, requested_position_id, conflicting_account_id,
                        account_id, directory_assignment_snapshot_hash,
@@ -788,6 +853,7 @@ public class WeComDirectoryOnboardingAdministrationService {
                 rs.getString("user_id_fingerprint"),
                 rs.getString("user_id_ciphertext"),
                 rs.getString("onboarding_kind"),
+                rs.getString("invitation_source"),
                 rs.getObject("source_binding_id", UUID.class),
                 rs.getObject("source_account_id", UUID.class),
                 rs.getString("directory_status"), rs.getString("failure_code"),
@@ -1142,8 +1208,11 @@ public class WeComDirectoryOnboardingAdministrationService {
     }
 
     private static String suggestedAction(
-            String status, String failureCode, boolean expiringSoon
+            String status, String failureCode, boolean expiringSoon, String invitationSource
     ) {
+        if ("EXPIRED".equals(status) && "MANUAL_LINK".equals(invitationSource)) {
+            return "原链接已失效，请重新点击一键邀请生成新链接";
+        }
         if ("EXPIRED".equals(status)) return "管理员重新生成邀请；原链接不可恢复";
         if (TECHNICAL_RETRY_FAILURES.contains(failureCode)) {
             return "管理员点击重试；系统会轮换凭据并发送新的120分钟邀请";
@@ -1214,6 +1283,7 @@ public class WeComDirectoryOnboardingAdministrationService {
             String requestedDisplayName, String requestedLoginName, String requestedPasswordHash,
             String fingerprint,
             String userIdCiphertext, String onboardingKind,
+            String invitationSource,
             UUID sourceBindingId, UUID sourceAccountId,
             String directoryStatus, String failureCode, OffsetDateTime invitationExpiresAt,
             UUID orgUnitId, UUID positionId,

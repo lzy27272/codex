@@ -37,6 +37,7 @@ import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardin
 import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.DirectoryEventRetryResponse;
 import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.DecisionRequest;
 import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.InvitationActionResponse;
+import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.OpenInvitationResponse;
 import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.RetryRequest;
 import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.SubmitRequest;
 import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.SubmitResponse;
@@ -106,6 +107,7 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
         when(properties.encryptionKey()).thenReturn(ENCRYPTION_KEY);
         when(properties.frontendBaseUrl()).thenReturn(URI.create("https://www.sfgzt.cn"));
         when(properties.invitationTtl()).thenReturn(Duration.ofMinutes(120));
+        when(properties.exchangeTtl()).thenReturn(Duration.ofMinutes(2));
         codec = new WeComDirectorySecretCodec(properties);
         employeeService = mock(WeComDirectoryOnboardingService.class);
         eventProcessor = mock(WeComDirectoryEventProcessor.class);
@@ -126,6 +128,64 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
 
         publishSelectableProfile(FRONT_POSITION);
         publishSelectableProfile(HOUSEKEEPING_POSITION);
+    }
+
+    @Test
+    void manualInvitationCreatesOnlyAOneTimeRegistrationLink() {
+        Counts before = identityCounts();
+
+        OpenInvitationResponse response = inTransaction(service::createOpenInvitation);
+
+        assertThat(response.enrollmentUrl().toString())
+                .startsWith("https://www.sfgzt.cn/#/wecom-onboarding?token=");
+        assertThat(response.status()).isEqualTo("WAITING_PROFILE");
+        assertThat(response.message()).contains("员工").contains("自行填写");
+        assertThat(jdbc.queryForMap("""
+                select invitation_source, invitation_created_by, display_name,
+                       requested_display_name, requested_login_name,
+                       requested_org_unit_id, requested_position_id,
+                       user_id_ciphertext, status,
+                       invitation_token_hash is not null as has_token
+                from wecom_person_onboarding where id = ?
+                """, response.candidateId()))
+                .containsEntry("invitation_source", "MANUAL_LINK")
+                .containsEntry("invitation_created_by", CEO)
+                .containsEntry("display_name", "待员工填写")
+                .containsEntry("status", "WAITING_PROFILE")
+                .containsEntry("has_token", true)
+                .containsEntry("requested_display_name", null)
+                .containsEntry("requested_login_name", null)
+                .containsEntry("requested_org_unit_id", null)
+                .containsEntry("requested_position_id", null)
+                .containsEntry("user_id_ciphertext", null);
+        assertThat(identityCounts()).isEqualTo(before);
+    }
+
+    @Test
+    void manualInvitationAdoptsVerifiedWeComIdentityWithoutPrefillingProfile() {
+        OpenInvitationResponse response = inTransaction(service::createOpenInvitation);
+        String userId = "manual-onboarding-" + UUID.randomUUID();
+
+        URI redirect = inTransaction(() -> lifecycleService().completeOAuth(
+                response.candidateId(), userId));
+
+        assertThat(redirect.toString())
+                .startsWith("https://www.sfgzt.cn/#/wecom-onboarding?exchange_code=");
+        var row = jdbc.queryForMap("""
+                select user_id_fingerprint, user_id_ciphertext,
+                       identity_verified_at is not null as verified,
+                       requested_display_name, requested_login_name,
+                       requested_org_unit_id, requested_position_id
+                from wecom_person_onboarding where id = ?
+                """, response.candidateId());
+        assertThat(row)
+                .containsEntry("user_id_fingerprint", codec.fingerprint(userId))
+                .containsEntry("verified", true)
+                .containsEntry("requested_display_name", null)
+                .containsEntry("requested_login_name", null)
+                .containsEntry("requested_org_unit_id", null)
+                .containsEntry("requested_position_id", null);
+        assertThat(codec.decrypt((String) row.get("user_id_ciphertext"))).isEqualTo(userId);
     }
 
     @Test

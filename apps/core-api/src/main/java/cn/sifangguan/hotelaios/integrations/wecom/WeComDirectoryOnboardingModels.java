@@ -65,6 +65,7 @@ public final class WeComDirectoryOnboardingModels {
             String displayName,
             String loginName,
             boolean requiresAccountRegistration,
+            String invitationSource,
             List<HotelOption> hotels,
             long rowVersion
     ) { }
@@ -86,6 +87,7 @@ public final class WeComDirectoryOnboardingModels {
             String displayName,
             String requestedLoginName,
             String onboardingKind,
+            String invitationSource,
             UUID requestedOrgUnitId,
             String requestedHotelName,
             String requestedDepartmentName,
@@ -103,6 +105,15 @@ public final class WeComDirectoryOnboardingModels {
     ) { }
 
     public record CandidateList(List<CandidateRow> items) { }
+
+    public record OpenInvitationResponse(
+            UUID candidateId,
+            URI enrollmentUrl,
+            OffsetDateTime expiresAt,
+            String status,
+            long rowVersion,
+            String message
+    ) { }
 
     public record DecisionRequest(
             long expectedVersion,

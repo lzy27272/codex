@@ -125,7 +125,7 @@ export function WecomDirectoryOnboardingEntry({ entry, onReturn }: { entry: Weco
       <h1>{context ? '完成入职绑定' : '企业微信入职验证'}</h1>
       <p>{context ? '企业微信身份已验证，请注册账号并补充任职信息。' : '系统只会核验您本人的企业微信身份，不公开其他员工信息。'}</p>
       {context && <>
-        <div className="onboarding-person"><i aria-hidden="true">人</i><span><strong>{context.displayName}</strong><small>企业微信成员</small></span><b>● 身份已验证</b></div>
+        <div className="onboarding-person"><i aria-hidden="true">人</i><span><strong>{context.invitationSource === 'MANUAL_LINK' ? '新员工注册' : context.displayName}</strong><small>企业微信成员</small></span><b>● 身份已验证</b></div>
         {context.requiresAccountRegistration && <div className="onboarding-registration-fields">
           <label>个人姓名<input value={displayName} maxLength={120} autoComplete="name" onChange={(event) => setDisplayName(event.target.value)} placeholder="请输入真实姓名" /></label>
           <label>登录账号<input value={loginName} maxLength={120} autoCapitalize="none" autoComplete="username" onChange={(event) => setLoginName(event.target.value)} placeholder="3位以上字母、数字、点、下划线或短横线" /></label>

@@ -7,6 +7,7 @@ const api = readFileSync(new URL('../src/features/wecom/directoryOnboardingApi.t
 const bindingAdministration = readFileSync(new URL('../src/features/wecom/WecomUserBindingAdministration.tsx', import.meta.url), 'utf8')
 const migration = readFileSync(new URL('../../../database/migrations/V41__wecom_directory_account_registration.sql', import.meta.url), 'utf8')
 const manualInvitationMigration = readFileSync(new URL('../../../database/migrations/V42__manual_wecom_onboarding_invitation.sql', import.meta.url), 'utf8')
+const onboardingDefaultsMigration = readFileSync(new URL('../../../database/migrations/V44__enable_reviewed_wecom_onboarding_positions.sql', import.meta.url), 'utf8')
 
 test('verified new members register their account before choosing assignment', () => {
   assert.match(entry, /个人姓名/)
@@ -44,4 +45,13 @@ test('manual invitations store no employee profile before verified registration'
   assert.match(manualInvitationMigration, /invitation_source/)
   assert.match(manualInvitationMigration, /MANUAL_LINK/)
   assert.match(manualInvitationMigration, /invitation_created_by/)
+})
+
+test('registration explains unavailable options and never exposes protected positions by default', () => {
+  assert.match(entry, /暂无可申请的门店岗位/)
+  assert.match(entry, /disabled=\{!hasHotelOptions\}/)
+  assert.match(entry, /positionOptions\.length === 0/)
+  assert.match(onboardingDefaultsMigration, /FRONT_DESK/)
+  assert.match(onboardingDefaultsMigration, /protected_permission\.delegable_to_position = false/)
+  assert.doesNotMatch(onboardingDefaultsMigration, /GROUP_CHAIRMAN|GROUP_GENERAL_MANAGER|GROUP_VICE_PRESIDENT|HR_KPI_ADMIN|PLATFORM_ADMIN|OTA_OPERATION_MANAGER/)
 })

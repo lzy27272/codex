@@ -275,7 +275,7 @@ class PositionManagementIntegrationTest {
         getAs("/api/v1/iam/me", FRONT_ACCOUNT, 200)
                 .andExpect(jsonPath("$.positionAssignments[0].permissionCodes").isArray())
                 .andExpect(jsonPath("$.positionAssignments[0].authorizationScopeType").value("SELF"))
-                .andExpect(jsonPath("$.positionAssignments[0].wecomSelfSelectable").value(false));
+                .andExpect(jsonPath("$.positionAssignments[0].wecomSelfSelectable").value(true));
     }
 
     @Test

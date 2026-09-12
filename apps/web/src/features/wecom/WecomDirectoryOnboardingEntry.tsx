@@ -68,6 +68,7 @@ export function WecomDirectoryOnboardingEntry({ entry, onReturn }: { entry: Weco
   const positionOptions = useMemo(() => (hotel?.departments ?? []).flatMap((department) => department.positions.map((position) => ({
     orgUnitId: department.id, positionId: position.id, label: `${department.name} · ${position.name}`,
   }))), [hotel])
+  const hasHotelOptions = Boolean(context?.hotels.length)
   const accountValid = !context?.requiresAccountRegistration || (
     displayName.trim().length > 0
     && /^[A-Za-z0-9][A-Za-z0-9._-]{2,119}$/.test(loginName.trim())
@@ -133,8 +134,9 @@ export function WecomDirectoryOnboardingEntry({ entry, onReturn }: { entry: Weco
           <label>确认密码<input type="password" value={passwordConfirmation} minLength={10} maxLength={128} autoComplete="new-password" onChange={(event) => setPasswordConfirmation(event.target.value)} placeholder="请再次输入密码" /></label>
           {passwordConfirmation && password !== passwordConfirmation && <small className="field-error">两次输入的密码不一致</small>}
         </div>}
-        <label>选择门店<select value={hotelId} onChange={(event) => { setHotelId(event.target.value); setSelection({ orgUnitId: '', positionId: '' }) }}><option value="">请选择门店</option>{context.hotels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <label>选择岗位<select value={`${selection.orgUnitId}:${selection.positionId}`} disabled={!hotelId} onChange={(event) => { const [orgUnitId, positionId] = event.target.value.split(':'); setSelection({ orgUnitId, positionId }) }}><option value=":">请选择岗位</option>{positionOptions.map((item) => <option key={`${item.orgUnitId}:${item.positionId}`} value={`${item.orgUnitId}:${item.positionId}`}>{item.label}</option>)}</select></label>
+        {!hasHotelOptions && <div className="inline-error"><strong>暂无可申请的门店岗位</strong><p>当前没有已开放的新员工岗位，请联系行政人事确认岗位功能方案已发布并允许企微员工申请。</p></div>}
+        <label>选择门店<select value={hotelId} disabled={!hasHotelOptions} onChange={(event) => { setHotelId(event.target.value); setSelection({ orgUnitId: '', positionId: '' }) }}><option value="">{hasHotelOptions ? '请选择门店' : '暂无可申请门店'}</option>{context.hotels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>选择岗位<select value={`${selection.orgUnitId}:${selection.positionId}`} disabled={!hotelId || positionOptions.length === 0} onChange={(event) => { const [orgUnitId, positionId] = event.target.value.split(':'); setSelection({ orgUnitId, positionId }) }}><option value=":">{hotelId && positionOptions.length === 0 ? '该门店暂无可申请岗位' : '请选择岗位'}</option>{positionOptions.map((item) => <option key={`${item.orgUnitId}:${item.positionId}`} value={`${item.orgUnitId}:${item.positionId}`}>{item.label}</option>)}</select></label>
         <small className="onboarding-note">提交后由行政人事或行政人事主管审核；审核前账号不可登录，也不会开通岗位权限。</small>
       </>}
       {busy && !context && <div className="wecom-entry-progress"><div className="spinner"/><strong>正在验证企业微信身份</strong></div>}

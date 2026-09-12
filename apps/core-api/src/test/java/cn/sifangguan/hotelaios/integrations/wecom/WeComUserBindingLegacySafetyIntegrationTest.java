@@ -277,6 +277,46 @@ class WeComUserBindingLegacySafetyIntegrationTest {
         assertBinding("ACTIVE", 1);
     }
 
+    @Test
+    void dashboardHidesDeletedEmployeesButRetainsTheirBindingAuditRecord() {
+        transactions.executeWithoutResult(status -> {
+            String userId = "deleted-dashboard-" + UUID.randomUUID();
+            insertBinding(userId, fingerprint(userId), "ACTIVE", null);
+            UUID employeeId = jdbc.queryForObject(
+                    "select id from employee where tenant_id = ? and account_id = ?",
+                    UUID.class, TENANT, ACCOUNT);
+
+            assertThat(service(false).dashboard().people())
+                    .extracting(person -> person.accountId())
+                    .contains(ACCOUNT);
+
+            jdbc.update("""
+                    update employee
+                    set employment_status = 'INACTIVE', deleted_at = now(), deleted_by = ?
+                    where tenant_id = ? and id = ?
+                    """, CEO, TENANT, employeeId);
+
+            assertThat(service(false).dashboard().people())
+                    .extracting(person -> person.accountId())
+                    .doesNotContain(ACCOUNT);
+
+            jdbc.update("""
+                    update employee
+                    set permanently_deleted_at = now(), permanently_deleted_by = ?
+                    where tenant_id = ? and id = ?
+                    """, CEO, TENANT, employeeId);
+
+            assertThat(service(false).dashboard().people())
+                    .extracting(person -> person.accountId())
+                    .doesNotContain(ACCOUNT);
+            assertThat(jdbc.queryForObject("""
+                    select count(*) from wecom_user_binding
+                    where tenant_id = ? and corp_id = ? and account_id = ?
+                    """, Integer.class, TENANT, CORP_ID, ACCOUNT)).isOne();
+            status.setRollbackOnly();
+        });
+    }
+
     private WeComUserBindingAdministrationService directoryService() {
         return service(true);
     }

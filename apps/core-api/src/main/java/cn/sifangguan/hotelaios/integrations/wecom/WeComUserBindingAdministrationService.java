@@ -149,6 +149,8 @@ public class WeComUserBindingAdministrationService {
                 left join user_account request_actor
                   on request_actor.tenant_id = req.tenant_id and request_actor.id = req.requested_by
                 where e.tenant_id = :tenantId
+                  and e.deleted_at is null
+                  and e.permanently_deleted_at is null
                 order by chosen.hotel_code nulls last, e.name, u.login_name
                 """, base(principal), (rs, rowNum) -> new PersonBase(
                 rs.getObject("account_id", UUID.class), rs.getObject("employee_id", UUID.class),

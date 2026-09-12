@@ -136,6 +136,37 @@ class PositionManagementIntegrationTest {
     }
 
     @Test
+    void savingPublishedOnlyProfileRecreatesEditableDraftInsteadOfReturning404() throws Exception {
+        JsonNode created = json(postJson("/api/v1/org/positions", """
+                {"name":"仅发布版本修复测试岗位","appliesToAllHotels":true,"applicableHotelIds":[],
+                 "permissionCodes":["org.read"],"authorizationScopeType":"SELF",
+                 "wecomSelfSelectable":false}
+                """, 201));
+        UUID positionId = UUID.fromString(created.path("id").asText());
+        JsonNode published = json(postJson("/api/v1/org/positions/" + positionId + "/profile/publish", """
+                {"expectedProfileVersion":0,"expectedPositionVersion":0}
+                """, 200));
+        UUID profileId = UUID.fromString(published.path("profileId").asText());
+
+        jdbc.update("""
+                delete from position_function_profile_version
+                where profile_id = ? and lifecycle_status = 'DRAFT'
+                """, profileId);
+
+        JsonNode saved = json(putJson("/api/v1/org/positions/" + positionId + "/profile/draft", """
+                {"expectedProfileVersion":0,"permissionCodes":["org.read","task.read"],
+                 "authorizationScopeType":"ORG_UNIT","wecomSelfSelectable":false}
+                """, 200));
+
+        assertThat(saved.path("publishedVersion").asInt()).isEqualTo(1);
+        assertThat(saved.path("draftVersion").asInt()).isEqualTo(2);
+        assertThat(saved.path("draftRowVersion").asLong()).isEqualTo(1);
+        assertThat(saved.path("status").asText()).isEqualTo("PUBLISHED_WITH_DRAFT");
+        assertThat(saved.path("permissionCodes")).hasSize(2);
+        assertThat(saved.path("permissionCodes").toString()).contains("org.read", "task.read");
+    }
+
+    @Test
     void protectedPermissionAndHotelElevationFailClosed() throws Exception {
         JsonNode options = json(getJson("/api/v1/org/positions/function-options", 200).andReturn());
         assertThat(options.findValuesAsText("permissionCode"))

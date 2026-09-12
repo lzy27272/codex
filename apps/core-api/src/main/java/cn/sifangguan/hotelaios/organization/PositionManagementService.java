@@ -597,7 +597,7 @@ public class PositionManagementService {
         ProfileLock profile = hotelId == null
                 ? lockGroupProfile(principal, positionId)
                 : requireOrCreateHotelProfile(principal, positionId, hotelId);
-        VersionLock draft = lockDraft(principal, profile.id());
+        VersionLock draft = lockOrCreateDraft(principal, profile.id());
         requireExpected(draft.rowVersion(), request.expectedProfileVersion());
 
         UUID groupBaseline = null;
@@ -1404,6 +1404,36 @@ public class PositionManagementService {
 
     private VersionLock lockDraft(TenantPrincipal principal, UUID profileId) {
         return versionByStatus(principal, profileId, "DRAFT", true);
+    }
+
+    private VersionLock lockOrCreateDraft(TenantPrincipal principal, UUID profileId) {
+        try {
+            return lockDraft(principal, profileId);
+        } catch (ResponseStatusException exception) {
+            if (exception.getStatusCode().value() != 404) throw exception;
+        }
+
+        VersionLock published = versionByStatus(principal, profileId, "PUBLISHED", false);
+        UUID draftId = UUID.randomUUID();
+        jdbc.update("""
+                insert into position_function_profile_version
+                    (id, tenant_id, profile_id, version_no, lifecycle_status,
+                     copied_from_version_id, based_on_group_version_id,
+                     authorization_scope_type, wecom_self_selectable, created_by)
+                values
+                    (:id, :tenantId, :profileId, :versionNo, 'DRAFT',
+                     :publishedId, :baselineId, :scope, :selfSelectable, :actorId)
+                """, base(principal)
+                .addValue("id", draftId)
+                .addValue("profileId", profileId)
+                .addValue("versionNo", published.versionNo() + 1)
+                .addValue("publishedId", published.id())
+                .addValue("baselineId", published.basedOnGroupVersionId())
+                .addValue("scope", published.authorizationScopeType())
+                .addValue("selfSelectable", published.wecomSelfSelectable())
+                .addValue("actorId", principal.actorId()));
+        replacePermissions(principal, draftId, permissionsForVersion(principal, published.id()));
+        return lockDraft(principal, profileId);
     }
 
     private VersionLock publishedVersion(TenantPrincipal principal, UUID positionId, UUID hotelId) {

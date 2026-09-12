@@ -43,6 +43,8 @@ export function WecomUserBindingAdministration({ identity, requestId, onClearReq
   const [qrData, setQrData] = useState<string>()
   const [history, setHistory] = useState<{ person: BindingPerson; entries: AuditEntry[] }>()
   const [invitationMode, setInvitationMode] = useState<'binding' | 'onboarding'>('binding')
+  const [existingEmployeeInviteOpen, setExistingEmployeeInviteOpen] = useState(false)
+  const [existingEmployeeAccountId, setExistingEmployeeAccountId] = useState('')
 
   const reload = async () => {
     setLoading(true); setError(undefined)
@@ -74,6 +76,8 @@ export function WecomUserBindingAdministration({ identity, requestId, onClearReq
       && (!status || person.bindingStatus === status)
       && (!normalized || `${person.employeeName} ${person.loginName}`.toLowerCase().includes(normalized)))
   }, [dashboard, hotel, department, query, requestId, status])
+  const bindablePeople = useMemo(() => (dashboard?.people ?? []).filter((person) =>
+    ['UNBOUND', 'EXPIRED', 'REVOKED'].includes(person.bindingStatus) && Boolean(defaultAssignment(person))), [dashboard])
 
   const command = async (key: string, operation: () => Promise<unknown>, success: string) => {
     setBusy(key); setError(undefined); setNotice(undefined)
@@ -89,7 +93,7 @@ export function WecomUserBindingAdministration({ identity, requestId, onClearReq
     finally { setBusy(undefined) }
   }
 
-  const inviteNewEmployee = () => {
+  const inviteAccountRegistration = () => {
     void showInvitation(createDirectoryOnboardingInvitation(identity).then((result) => ({
       requestId: result.candidateId,
       enrollmentUrl: result.enrollmentUrl,
@@ -125,6 +129,23 @@ export function WecomUserBindingAdministration({ identity, requestId, onClearReq
     const assignment = defaultAssignment(person)
     if (!assignment) { setError('该员工没有有效任职，不能发起绑定'); return }
     void showInvitation(inviteBinding(identity, person.accountId, assignment.id))
+  }
+
+  const openExistingEmployeeInvite = () => {
+    if (!bindablePeople.length) {
+      setError('当前没有可发起绑定的在职员工；请先在人员管理中建立员工账号和有效任职。')
+      return
+    }
+    setError(undefined)
+    setExistingEmployeeAccountId(bindablePeople[0].accountId)
+    setExistingEmployeeInviteOpen(true)
+  }
+
+  const inviteExistingEmployee = () => {
+    const person = bindablePeople.find((item) => item.accountId === existingEmployeeAccountId)
+    if (!person) return
+    setExistingEmployeeInviteOpen(false)
+    invite(person)
   }
 
   const approve = (person: BindingPerson) => {
@@ -207,7 +228,7 @@ export function WecomUserBindingAdministration({ identity, requestId, onClearReq
 
   const capabilities = dashboard?.capabilities
   return <section className="page-section configuration-page">
-    <header className="page-title"><div><span className="eyebrow">WECOM IDENTITY GOVERNANCE</span><h1>企业微信人员绑定</h1><p>管理员生成入职二维码或链接，员工使用企业微信验证并自行填写注册资料，提交后进入统一审核。</p></div><div className="page-actions">{capabilities?.canManage && <button className="primary" disabled={Boolean(busy)} onClick={inviteNewEmployee}>{busy === 'invite' ? '正在生成…' : '一键邀请'}</button>}<span className="source-flag api">UserID 仅显示脱敏指纹</span><button className="secondary" disabled={loading} onClick={() => void reload()}>刷新</button></div></header>
+    <header className="page-title"><div><span className="eyebrow">WECOM IDENTITY GOVERNANCE</span><h1>企业微信人员绑定</h1><p>已有中台账号的在职员工使用专用绑定邀请；没有中台账号的员工通过注册邀请提交资料审核。</p></div><div className="page-actions">{capabilities?.canManage && <><button className="primary" disabled={Boolean(busy) || loading} onClick={openExistingEmployeeInvite}>已有中台账号绑定</button><button className="secondary" disabled={Boolean(busy)} onClick={inviteAccountRegistration}>{busy === 'invite' ? '正在生成…' : '无中台账号注册'}</button></>}<span className="source-flag api">UserID 仅显示脱敏指纹</span><button className="secondary" disabled={loading} onClick={() => void reload()}>刷新</button></div></header>
     <div className="inline-warning page-error">人员绑定与企业微信群推送完全独立。绑定启用不会打开任何群机器人、应用消息或日报自动推送开关。</div>
     {requestId && <div className="inline-success page-error">已定位到通知对应的绑定申请。<button className="link-button" onClick={onClearRequest}>查看全部人员绑定</button></div>}
     {notice && <div className="inline-success page-error">{notice}</div>}{error && <div className="inline-error page-error">{error}</div>}
@@ -223,7 +244,8 @@ export function WecomUserBindingAdministration({ identity, requestId, onClearReq
         {people.map((person) => <div className={styles.row} key={person.accountId}><span><input type="checkbox" checked={selected.has(person.accountId)} onChange={(event) => setSelected((current) => { const next = new Set(current); event.target.checked ? next.add(person.accountId) : next.delete(person.accountId); return next })}/></span><span><strong>{person.hotelCode ? `${person.hotelCode} · ` : ''}{person.hotelName ?? '未归属门店'}</strong><small>{person.employeeName}</small></span><span><strong>{person.loginName}</strong><small>{person.departmentName ? `${person.departmentName} · ` : ''}{person.positionName ?? '无有效任职'}</small></span><span><b className={`${styles.status} ${styles[person.bindingStatus.toLowerCase()]}`}>{statusLabel[person.bindingStatus] ?? person.bindingStatus}</b>{person.expiringSoon && <em>即将过期</em>}<small>{person.reason || person.recommendedAction}</small></span><span>{person.assignments.length > 1 && capabilities?.canManage ? <select value={person.preferredAssignmentId ?? defaultAssignment(person)?.id ?? ''} disabled={busy === `assignment:${person.accountId}`} onChange={(event) => setPreferred(person, event.target.value)}>{person.assignments.map((assignment) => <option key={assignment.id} value={assignment.id}>{[assignment.hotelName, assignment.departmentName, assignment.positionName].filter(Boolean).join(' · ')}</option>)}</select> : <small>{person.defaultAssignment ?? '—'}</small>}</span><span><small>验证：{displayTime(person.lastVerifiedAt)}</small><small>更新：{displayTime(person.updatedAt)}{person.updatedBy ? ` · ${person.updatedBy}` : ' · 系统'}</small></span><span><code>{person.userIdFingerprint ?? '—'}</code></span><span className={styles.actions}>{capabilities?.canManage && ['UNBOUND','EXPIRED','REVOKED'].includes(person.bindingStatus) && <button onClick={() => invite(person)}>发起绑定</button>}{person.bindingStatus === 'WAITING_SCAN' && capabilities?.canManage && <button onClick={() => cancel(person)}>取消邀请</button>}{person.bindingStatus === 'WAITING_APPROVAL' && person.requestStatus === 'AUTHORIZING' && capabilities?.canManage && <button onClick={() => cancel(person)}>取消本次授权</button>}{person.bindingStatus === 'WAITING_APPROVAL' && person.requestStatus === 'PENDING_APPROVAL' && capabilities?.canApprove && <><button onClick={() => approve(person)}>确认启用</button><button className={styles.danger} onClick={() => reject(person)}>拒绝</button></>}{person.bindingStatus === 'ABNORMAL' && person.requestStatus === 'FAILED' && capabilities?.canApprove && <button onClick={() => retry(person)}>技术重试</button>}{person.bindingStatus === 'ABNORMAL' && person.requestStatus === 'CONFLICT' && capabilities?.canApprove && <><button onClick={() => approve(person)}>审批转移</button><button className={styles.danger} onClick={() => reject(person)}>拒绝</button></>}{person.bindingStatus === 'ACTIVE' && capabilities?.canManage && <button onClick={() => changeState(person, 'suspend')}>暂停</button>}{person.bindingStatus === 'SUSPENDED' && capabilities?.canApprove && <button onClick={() => changeState(person, 'resume')}>恢复</button>}{['ACTIVE','SUSPENDED'].includes(person.bindingStatus) && capabilities?.canApprove && <><button onClick={() => startRebind(person)}>重新绑定</button><button className={styles.danger} onClick={() => changeState(person, 'revoke')}>解除</button></>}<button onClick={() => void viewHistory(person)}>操作记录</button></span></div>)}
       </div>}
     </article>
-    {invitation && <div className="modal-backdrop"><section className={`modal ${styles.invitation}`} role="dialog" aria-modal="true"><header><div><span className="panel-kicker">120 MINUTES</span><h2>{invitationMode === 'onboarding' ? '新员工入职邀请' : '员工绑定邀请'}</h2></div><button className="close" onClick={() => setInvitation(undefined)}>×</button></header><div className={styles.invitationBody}>{qrData ? <img src={qrData} alt={invitationMode === 'onboarding' ? '企业微信新员工注册二维码' : '企业微信人员绑定二维码'}/> : <div className="spinner"/>}<strong>请员工使用企业微信扫码或打开链接</strong><small>{invitationMode === 'onboarding' ? '员工验证企业微信身份后，自行填写姓名、账号、密码、门店和岗位，再提交管理员审核。' : '请员工核对本人身份并完成绑定。'}</small><small>有效期至 {displayTime(invitation.expiresAt)}。链接过期后不能恢复，只能重新生成。</small><input readOnly value={invitation.enrollmentUrl} aria-label="企业微信邀请链接"/><div className={styles.invitationActions}><button className="secondary" onClick={() => void copyInvitation()}>复制链接</button><button className="primary" onClick={() => void shareInvitation()}>发送给员工</button></div></div></section></div>}
+    {existingEmployeeInviteOpen && <div className="modal-backdrop"><section className={`modal ${styles.invitation}`} role="dialog" aria-modal="true" aria-labelledby="existing-employee-invite-title"><header><div><span className="panel-kicker">EXISTING EMPLOYEE</span><h2 id="existing-employee-invite-title">选择在职员工</h2></div><button className="close" onClick={() => setExistingEmployeeInviteOpen(false)}>×</button></header><div className={styles.invitationBody}><strong>绑定已有中台账号</strong><small>适用于已经在企业微信、且中台已有员工档案和任职的在职人员。员工不会被要求重新注册账号。</small><label>选择员工<select value={existingEmployeeAccountId} onChange={(event) => setExistingEmployeeAccountId(event.target.value)}>{bindablePeople.map((person) => { const assignment = defaultAssignment(person); return <option key={person.accountId} value={person.accountId}>{[person.employeeName, person.loginName, assignment?.hotelName, assignment?.positionName].filter(Boolean).join(' · ')}</option> })}</select></label><div className={styles.invitationActions}><button className="secondary" onClick={() => setExistingEmployeeInviteOpen(false)}>取消</button><button className="primary" disabled={!existingEmployeeAccountId} onClick={inviteExistingEmployee}>生成绑定邀请</button></div></div></section></div>}
+    {invitation && <div className="modal-backdrop"><section className={`modal ${styles.invitation}`} role="dialog" aria-modal="true"><header><div><span className="panel-kicker">120 MINUTES</span><h2>{invitationMode === 'onboarding' ? '无中台账号注册邀请' : '员工绑定邀请'}</h2></div><button className="close" onClick={() => setInvitation(undefined)}>×</button></header><div className={styles.invitationBody}>{qrData ? <img src={qrData} alt={invitationMode === 'onboarding' ? '企业微信员工注册二维码' : '企业微信人员绑定二维码'}/> : <div className="spinner"/>}<strong>请员工使用企业微信扫码或打开链接</strong><small>{invitationMode === 'onboarding' ? '适用于尚无中台账号的员工；验证企业微信身份后，自行填写姓名、账号、密码、门店和岗位，再提交管理员审核。' : '该邀请已指定现有中台账号，请员工核对本人身份并完成绑定，不需要重新注册。'}</small><small>有效期至 {displayTime(invitation.expiresAt)}。链接过期后不能恢复，只能重新生成。</small><input readOnly value={invitation.enrollmentUrl} aria-label="企业微信邀请链接"/><div className={styles.invitationActions}><button className="secondary" onClick={() => void copyInvitation()}>复制链接</button><button className="primary" onClick={() => void shareInvitation()}>发送给员工</button></div></div></section></div>}
     {history && <div className="modal-backdrop"><section className={`modal ${styles.history}`} role="dialog" aria-modal="true"><header><div><span className="panel-kicker">APPEND-ONLY AUDIT</span><h2>{history.person.employeeName} · 操作记录</h2></div><button className="close" onClick={() => setHistory(undefined)}>×</button></header><div className={styles.historyList}>{history.entries.length ? history.entries.map((entry, index) => <div key={`${entry.createdAt}-${index}`}><strong>{entry.action}</strong><span>{entry.actorName ?? '系统'} · {displayTime(entry.createdAt)}</span><small>{entry.summary || '已写入不可覆盖的审计记录'}</small></div>) : <div className="state-card"><strong>暂无操作记录</strong></div>}</div></section></div>}
   </section>
 }

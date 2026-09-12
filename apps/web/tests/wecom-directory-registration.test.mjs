@@ -32,13 +32,21 @@ test('migration reserves open logins and grants both HR reviewer roles', () => {
   assert.match(migration, /'wecom-onboarding\.review'/)
 })
 
-test('one-click invitation reuses employee self-registration instead of administrator prefill', () => {
+test('employees without a platform account use reviewed self-registration', () => {
   assert.match(bindingAdministration, /createDirectoryOnboardingInvitation/)
-  assert.match(bindingAdministration, /新员工入职邀请/)
+  assert.match(bindingAdministration, /无中台账号注册邀请/)
   assert.match(bindingAdministration, /自行填写姓名、账号、密码、门店和岗位/)
   assert.doesNotMatch(bindingAdministration, /createEmployeeInvitation|employeeInviteForm/)
   assert.match(api, /directory-onboarding\/invitations/)
   assert.match(entry, /context\.invitationSource === 'MANUAL_LINK'/)
+})
+
+test('existing employees receive an account-specific binding invitation without registering again', () => {
+  assert.match(bindingAdministration, /已有中台账号绑定/)
+  assert.match(bindingAdministration, /选择在职员工/)
+  assert.match(bindingAdministration, /bindablePeople/)
+  assert.match(bindingAdministration, /inviteBinding\(identity, person\.accountId, assignment\.id\)/)
+  assert.match(bindingAdministration, /不会被要求重新注册账号/)
 })
 
 test('manual invitations store no employee profile before verified registration', () => {

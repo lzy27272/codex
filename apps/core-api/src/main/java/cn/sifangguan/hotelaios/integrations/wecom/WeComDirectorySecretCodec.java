@@ -16,9 +16,7 @@ import java.util.HexFormat;
 
 /** Encrypts provider identifiers at rest and creates non-reversible lookup fingerprints. */
 @Component
-@ConditionalOnProperty(
-        name = {"app.wecom.enabled", "app.wecom.directory-sync-enabled"}, havingValue = "true"
-)
+@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
 public class WeComDirectorySecretCodec {
     private static final int GCM_IV_BYTES = 12;
     private static final int GCM_TAG_BITS = 128;

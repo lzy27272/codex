@@ -91,7 +91,10 @@ class OrganizationMaintenanceIntegrationTest {
         deleteJson("/api/v1/org/positions/" + positionId + "?expectedVersion=1", CEO, 204);
         deleteJson("/api/v1/org/employees/" + employeeId, CEO, 204);
 
-        assertThat(count("org_unit", orgId)).isZero();
+        assertThat(count("org_unit", orgId)).isOne();
+        assertThat(jdbc.queryForObject(
+                "select status from org_unit where id = ?", String.class, orgId
+        )).isEqualTo("DELETED");
         assertThat(count("position_definition", positionId)).isOne();
         assertThat(jdbc.queryForObject(
                 "select deleted_at is not null from position_definition where id = ?", Boolean.class, positionId
@@ -139,7 +142,10 @@ class OrganizationMaintenanceIntegrationTest {
                 .isEqualTo("INACTIVE");
         assertThat(jdbc.queryForObject("select valid_to is not null from role_assignment where id = ?", Boolean.class, standardRoleAssignmentId))
                 .isTrue();
-        deleteJson("/api/v1/org/units/" + orgId, CEO, 400);
+        deleteJson("/api/v1/org/units/" + orgId, CEO, 204);
+        assertThat(jdbc.queryForObject(
+                "select status from org_unit where id = ?", String.class, orgId
+        )).isEqualTo("DELETED");
 
         deleteJson("/api/v1/org/positions/" + positionId + "?expectedVersion=1", CEO, 204);
 

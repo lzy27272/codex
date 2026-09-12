@@ -7,7 +7,7 @@ import { AsyncState } from '../../shared/AsyncState'
 import { useScopedResource } from '../../shared/useScopedResource'
 import { useStableCommand } from '../../shared/useStableCommand'
 import { AiRecommendationCard, FeatureHeader, StatusBadge, featureStyles as styles, formatLocalDateTime } from '../shared/FeatureUI'
-import { loadCurrentBusinessDay, loadDailyReport, loadMyDailyReports, loadTeamDailyReports, requestDailyReportCorrection, reviewDailyReport, reviewDailyReportRevision, saveDailyReportDraft, submitDailyReport } from './api'
+import { loadCurrentBusinessDay, loadDailyReport, loadDailyReportOrgOptions, loadMyDailyReports, loadTeamDailyReports, requestDailyReportCorrection, reviewDailyReport, reviewDailyReportRevision, saveDailyReportDraft, submitDailyReport, type DailyReportOrgOption } from './api'
 import type { DailyReportDetail, DailyReportDraftInput, DailyReportSummary } from './types'
 
 export function DailyReportRoutes({ view, params, identity, grantedPermissions, go }: { view: DailyFeatureRouteId; params: RouteParams; identity: RoleContext; grantedPermissions: string[]; go: AppNavigate }) {
@@ -18,7 +18,30 @@ export function DailyReportRoutes({ view, params, identity, grantedPermissions, 
 }
 
 function ReportList({ mode, identity, params, go }: { mode: 'my' | 'team'; identity: RoleContext; params: RouteParams; go: AppNavigate }) {
+  if (mode === 'team') return <TeamReportList identity={identity} params={params} go={go} />
   const orgUnitId = params.orgUnitId || identity.assignmentOrgUnitId || identity.orgScopes[0] || ''
+  return <ScopedReportList mode="my" identity={identity} params={params} go={go} orgUnitId={orgUnitId} orgOptions={[]} />
+}
+
+function TeamReportList({ identity, params, go }: { identity: RoleContext; params: RouteParams; go: AppNavigate }) {
+  const options = useScopedResource(
+    `${identity.key}:daily-report-org-options`,
+    (signal) => loadDailyReportOrgOptions(identity, signal),
+    [] as DailyReportOrgOption[],
+    30_000,
+  )
+  const requestedOrgUnitId = params.orgUnitId || identity.assignmentOrgUnitId || ''
+  const selected = options.data.find((option) => option.id === requestedOrgUnitId) ?? options.data[0]
+  if (options.loading) {
+    return <section className={styles.page}><FeatureHeader eyebrow="TEAM DAILY REPORTS" title="团队日报" description="正在读取可管理的门店范围。" /><AsyncState loading /></section>
+  }
+  if (options.error || !selected) {
+    return <section className={styles.page}><FeatureHeader eyebrow="TEAM DAILY REPORTS" title="团队日报" description="团队日报需要先选择一个有效门店。" /><AsyncState loading={false} error={options.error || new Error('当前权限范围内没有已启用门店')} onRetry={options.reload} /></section>
+  }
+  return <ScopedReportList mode="team" identity={identity} params={params} go={go} orgUnitId={selected.id} orgOptions={options.data} />
+}
+
+function ScopedReportList({ mode, identity, params, go, orgUnitId, orgOptions }: { mode: 'my' | 'team'; identity: RoleContext; params: RouteParams; go: AppNavigate; orgUnitId: string; orgOptions: DailyReportOrgOption[] }) {
   const currentDay = useScopedResource(
     `${identity.key}:current-business-day:${orgUnitId}:${params.businessDate ?? ''}`,
     (signal) => params.businessDate
@@ -32,10 +55,10 @@ function ReportList({ mode, identity, params, go }: { mode: 'my' | 'team'; ident
   if (currentDay.error || !currentDay.data?.businessDate) {
     return <section className={styles.page}><FeatureHeader eyebrow={mode === 'my' ? 'MY DAILY REPORTS' : 'TEAM DAILY REPORTS'} title={mode === 'my' ? '我的日报' : '团队日报'} description="营业日由服务端统一解析，避免凌晨跨日时查询错误日期。" /><AsyncState loading={false} error={currentDay.error || new Error('当前营业日不可用')} onRetry={currentDay.reload} /></section>
   }
-  return <ResolvedReportList key={`${identity.key}:${mode}:${currentDay.data.businessDate}`} mode={mode} identity={identity} params={params} go={go} initialBusinessDate={currentDay.data.businessDate} orgUnitId={orgUnitId} />
+  return <ResolvedReportList key={`${identity.key}:${mode}:${orgUnitId}:${currentDay.data.businessDate}`} mode={mode} identity={identity} params={params} go={go} initialBusinessDate={currentDay.data.businessDate} orgUnitId={orgUnitId} orgOptions={orgOptions} />
 }
 
-function ResolvedReportList({ mode, identity, params, go, initialBusinessDate, orgUnitId }: { mode: 'my' | 'team'; identity: RoleContext; params: RouteParams; go: AppNavigate; initialBusinessDate: string; orgUnitId: string }) {
+function ResolvedReportList({ mode, identity, params, go, initialBusinessDate, orgUnitId, orgOptions }: { mode: 'my' | 'team'; identity: RoleContext; params: RouteParams; go: AppNavigate; initialBusinessDate: string; orgUnitId: string; orgOptions: DailyReportOrgOption[] }) {
   const [businessDate, setBusinessDate] = useState(initialBusinessDate)
   const [status, setStatus] = useState(params.status || '')
   const key = `${identity.key}:daily-reports:${mode}:${businessDate}:${status}:${orgUnitId}:${identity.businessActorAssignmentId ?? ''}`
@@ -44,11 +67,11 @@ function ResolvedReportList({ mode, identity, params, go, initialBusinessDate, o
     : loadTeamDailyReports(identity, signal, { businessDate, status, orgUnitId }), [], 30_000)
   const updateFilters = (nextDate: string, nextStatus: string) => {
     setBusinessDate(nextDate); setStatus(nextStatus)
-    go(mode === 'my' ? 'daily-reports-my' : 'daily-reports-team', { ...params, businessDate: nextDate, status: nextStatus || undefined })
+    go(mode === 'my' ? 'daily-reports-my' : 'daily-reports-team', { ...params, businessDate: nextDate, status: nextStatus || undefined, orgUnitId: mode === 'team' ? orgUnitId : undefined })
   }
   return <section className={styles.page}>
     <FeatureHeader eyebrow={mode === 'my' ? 'MY DAILY REPORTS' : 'TEAM DAILY REPORTS'} title={mode === 'my' ? '我的日报' : '团队日报'} description={mode === 'my' ? '由当前岗位工作包驱动，按模块填报，不使用统一长表。' : '集中处理未提交、异常日报、待补充和修订审核。'} />
-    <div className={styles.toolbar}><label>营业日<input type="date" value={businessDate} onChange={(event) => updateFilters(event.target.value, status)} /></label><label>状态<select value={status} onChange={(event) => updateFilters(businessDate, event.target.value)}><option value="">全部</option><option value="DRAFT">草稿</option><option value="SUBMITTED">已提交</option><option value="ARCHIVED">已归档</option></select></label><button className="secondary" onClick={() => void resource.reload()}>刷新</button></div>
+    <div className={styles.toolbar}>{mode === 'team' && <label>门店<select value={orgUnitId} onChange={(event) => go('daily-reports-team', { ...params, orgUnitId: event.target.value, businessDate: undefined })}>{orgOptions.map((option) => <option key={option.id} value={option.id}>{option.code ? `${option.code} · ` : ''}{option.name}</option>)}</select></label>}<label>营业日<input type="date" value={businessDate} onChange={(event) => updateFilters(event.target.value, status)} /></label><label>状态<select value={status} onChange={(event) => updateFilters(businessDate, event.target.value)}><option value="">全部</option><option value="DRAFT">草稿</option><option value="SUBMITTED">已提交</option><option value="ARCHIVED">已归档</option></select></label><button className="secondary" onClick={() => void resource.reload()}>刷新</button></div>
     <AsyncState loading={resource.loading} error={resource.error} empty={!resource.data.length} onRetry={resource.reload} emptyTitle="该营业日暂无日报" emptyDescription="这是有效空结果；若接口不可用，页面会显示单独的错误状态。" />
     {!resource.loading && !resource.error && <div className={styles.cardGrid}>{resource.data.map((report) => <ReportCard key={report.id} report={report} go={go} />)}</div>}
   </section>

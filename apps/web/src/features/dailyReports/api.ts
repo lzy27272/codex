@@ -26,6 +26,12 @@ export type CurrentBusinessDay = {
   currentBusinessDay: boolean
 }
 
+export type DailyReportOrgOption = {
+  id: string
+  code: string
+  name: string
+}
+
 const row = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {}
 const rows = (value: unknown): Row[] => Array.isArray(value) ? value.map(row) : []
 const text = (value: unknown, fallback = '') => value === undefined || value === null ? fallback : String(value)
@@ -310,6 +316,20 @@ export async function loadCurrentBusinessDay(identity: ApiIdentity, orgUnitId: s
     resolvedAt: text(source.resolvedAt),
     currentBusinessDay: source.currentBusinessDay !== false,
   }
+}
+
+export async function loadDailyReportOrgOptions(identity: ApiIdentity, signal: AbortSignal): Promise<DailyReportOrgOption[]> {
+  const endpoint = '/org/units?unitType=HOTEL'
+  const payload = await featureApiRequest<unknown[] | PageEnvelope<unknown>>(endpoint, identity, { signal })
+  return requireItems(payload, endpoint)
+    .map(row)
+    .filter((source) => text(source.status).toUpperCase() === 'ACTIVE' && text(source.unit_type ?? source.unitType).toUpperCase() === 'HOTEL')
+    .map((source) => ({
+      id: text(source.id),
+      code: text(source.property_code ?? source.propertyCode ?? source.code),
+      name: text(source.name),
+    }))
+    .filter((source) => Boolean(source.id && source.name))
 }
 
 export async function loadTeamDailyReports(identity: ApiIdentity, signal: AbortSignal, filters: { businessDate?: string; status?: string; orgUnitId?: string } = {}) {

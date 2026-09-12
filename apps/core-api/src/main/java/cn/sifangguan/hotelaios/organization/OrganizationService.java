@@ -55,6 +55,7 @@ public class OrganizationService {
                 from org_unit o
                 left join hotel_profile h on h.tenant_id = o.tenant_id and h.org_unit_id = o.id
                 where o.tenant_id = :tenantId
+                  and o.status <> 'DELETED'
                   and (cast(:unitType as varchar) is null or o.unit_type = :unitType)
                 """ + visibility + " order by o.sort_order, o.name", parameters);
     }
@@ -198,24 +199,32 @@ public class OrganizationService {
         if (!"INACTIVE".equals(String.valueOf(current.get("status")))) {
             throw new IllegalArgumentException("请先停用组织，再执行删除");
         }
-        Integer children = jdbc.queryForObject("""
-                select count(*) from org_unit
-                where tenant_id = :tenantId and parent_id = :id
-                """, base(principal).addValue("id", orgUnitId), Integer.class);
-        if (children != null && children > 0) {
-            throw new IllegalArgumentException("该组织仍有下级组织，只能停用，不能删除");
+        MapSqlParameterSource parameters = base(principal).addValue("id", orgUnitId);
+        List<Map<String, Object>> subtree = jdbc.queryForList("""
+                select child.id, child.status
+                from org_unit_closure closure
+                join org_unit child
+                  on child.tenant_id = closure.tenant_id
+                 and child.id = closure.descendant_id
+                where closure.tenant_id = :tenantId and closure.ancestor_id = :id
+                order by closure.depth desc
+                """, parameters);
+        if (subtree.stream().anyMatch(row -> !"INACTIVE".equals(String.valueOf(row.get("status"))))) {
+            throw new IllegalArgumentException("删除前必须先停用该组织及全部下级组织");
         }
-        try {
-            MapSqlParameterSource parameters = base(principal).addValue("id", orgUnitId);
-            jdbc.update("delete from hotel_profile where tenant_id = :tenantId and org_unit_id = :id", parameters);
-            int deleted = jdbc.update("delete from org_unit where tenant_id = :tenantId and id = :id", parameters);
-            if (deleted != 1) {
-                throw new IllegalArgumentException("组织不存在或不属于当前租户");
-            }
-        } catch (DataIntegrityViolationException exception) {
-            throw new IllegalArgumentException("该组织已有任职、权限、工作或经营数据，只能停用，不能删除", exception);
+        List<UUID> subtreeIds = subtree.stream()
+                .map(row -> (UUID) row.get("id"))
+                .toList();
+        int deleted = jdbc.update("""
+                update org_unit
+                set status = 'DELETED', updated_at = now()
+                where tenant_id = :tenantId and id in (:subtreeIds) and status = 'INACTIVE'
+                """, parameters.addValue("subtreeIds", subtreeIds));
+        if (deleted != subtreeIds.size()) {
+            throw new IllegalArgumentException("组织状态已变更，请刷新后重试");
         }
-        auditWriter.record("ORG_UNIT_DELETED", "ORG_UNIT", orgUnitId, "{\"status\":\"DELETED\"}");
+        auditWriter.record("ORG_UNIT_DELETED", "ORG_UNIT", orgUnitId,
+                "{\"status\":\"DELETED\",\"subtreeCount\":" + deleted + "}");
     }
 
     @Transactional(readOnly = true)
@@ -900,7 +909,7 @@ public class OrganizationService {
     private Map<String, Object> requireOrg(TenantPrincipal principal, UUID orgUnitId) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 select id, parent_id, code, name, unit_type, status, sort_order
-                from org_unit where tenant_id = :tenantId and id = :id
+                from org_unit where tenant_id = :tenantId and id = :id and status <> 'DELETED'
                 """, base(principal).addValue("id", orgUnitId));
         if (rows.isEmpty()) {
             throw new IllegalArgumentException("组织不存在或不属于当前租户");

@@ -34,9 +34,7 @@ import java.util.regex.Pattern;
 import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.*;
 
 @Service
-@ConditionalOnProperty(
-        name = {"app.wecom.enabled", "app.wecom.directory-sync-enabled"}, havingValue = "true"
-)
+@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
 public class WeComDirectoryOnboardingService {
     private static final int MAX_SECRET_LENGTH = 512;
     private static final Pattern LOGIN_NAME = Pattern.compile("[a-z0-9][a-z0-9._-]{2,119}");

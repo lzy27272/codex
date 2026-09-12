@@ -12,23 +12,26 @@
 
 ## 默认安全状态
 
-`WECOM_DIRECTORY_SYNC_ENABLED` 默认是 `false`。数据库迁移和 Web 页面上线不等于启用通讯录回调，也不等于开启应用消息或群机器人发送。
+`WECOM_DIRECTORY_SYNC_ENABLED` 默认是 `false`。人工生成注册链接和入职审核随 `WECOM_ENABLED` 启用，不依赖通讯录同步。数据库迁移和 Web 页面上线不等于启用通讯录回调，也不等于开启应用消息或群机器人发送。
 
-敏感值只能在服务器受控环境中配置，不进入 Git、聊天、命令行参数、截图或日志。启用目录入职需要配置：
+敏感值只能在服务器受控环境中配置，不进入 Git、聊天、命令行参数、截图或日志。启用人工入职需要配置：
 
 - `WECOM_ENABLED`
-- `WECOM_DIRECTORY_SYNC_ENABLED`
 - `WECOM_TENANT_ID`
 - `WECOM_CORP_ID`
 - `WECOM_AGENT_ID`
 - `WECOM_CORP_SECRET`
 - `WECOM_FRONTEND_BASE_URL`
 - `WECOM_OAUTH_CALLBACK_URL`
+- `WECOM_DIRECTORY_ENCRYPTION_KEY`（Base64 编码的 32 字节密钥）
+- `WECOM_DIRECTORY_OAUTH_CALLBACK_URL`
+
+只有启用通讯录自动同步时，才额外配置：
+
+- `WECOM_DIRECTORY_SYNC_ENABLED=true`
 - `WECOM_DIRECTORY_CALLBACK_TOKEN`
 - `WECOM_DIRECTORY_CALLBACK_AES_KEY`
 - `WECOM_DIRECTORY_RECEIVE_ID`（可留空并使用 CorpID）
-- `WECOM_DIRECTORY_ENCRYPTION_KEY`（Base64 编码的 32 字节密钥）
-- `WECOM_DIRECTORY_OAUTH_CALLBACK_URL`
 
 生产域名对应地址：
 

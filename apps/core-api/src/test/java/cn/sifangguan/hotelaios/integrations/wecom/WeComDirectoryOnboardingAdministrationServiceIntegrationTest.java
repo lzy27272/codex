@@ -25,6 +25,7 @@ import java.sql.Connection;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Set;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -124,7 +125,7 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
                 codec,
                 mock(WeComApiClient.class),
                 employeeService,
-                eventProcessor);
+                Optional.of(eventProcessor));
 
         publishSelectableProfile(FRONT_POSITION);
         publishSelectableProfile(HOUSEKEEPING_POSITION);

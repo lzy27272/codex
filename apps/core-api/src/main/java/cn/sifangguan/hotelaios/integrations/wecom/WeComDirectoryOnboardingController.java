@@ -22,9 +22,7 @@ import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardin
 
 @RestController
 @RequestMapping("/api/v1/integrations/wecom/directory-onboarding")
-@ConditionalOnProperty(
-        name = {"app.wecom.enabled", "app.wecom.directory-sync-enabled"}, havingValue = "true"
-)
+@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
 public class WeComDirectoryOnboardingController {
     static final String VERIFIER_COOKIE = "__Host-wecom_directory_onboarding_verifier";
 

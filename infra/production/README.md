@@ -43,6 +43,12 @@ WECOM_WORKER_ENABLED=false
 WECOM_BOT_ACTIONS_ENABLED=false
 ```
 
+When `WECOM_ENABLED=true`, manual employee invitations and onboarding review
+also require `WECOM_DIRECTORY_ENCRYPTION_KEY` (a Base64-encoded 32-byte key)
+and `WECOM_DIRECTORY_OAUTH_CALLBACK_URL`. `WECOM_DIRECTORY_SYNC_ENABLED`
+remains `false` unless the separate directory-callback rollout is approved;
+callback token and AES settings are required only for that rollout.
+
 The systemd command line intentionally fixes `server.address` and `server.port`
 to `127.0.0.1:18080`, regardless of environment-file values. Leave
 `LOGGING_FILE_NAME` unset so Spring logs to journald under the service sandbox.

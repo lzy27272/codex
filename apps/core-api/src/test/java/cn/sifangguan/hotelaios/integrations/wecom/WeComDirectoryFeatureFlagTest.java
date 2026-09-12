@@ -30,11 +30,11 @@ class WeComDirectoryFeatureFlagTest {
     }
 
     @Test
-    void enablingWeComAloneDoesNotEnableDirectorySync() {
+    void enablingWeComEnablesManualOnboardingButNotDirectoryCallbacks() {
         contextRunner.withPropertyValues("app.wecom.enabled=true")
                 .run(context -> {
                     assertThat(context).doesNotHaveBean(WeComDirectoryCallbackController.class);
-                    assertThat(context).doesNotHaveBean(WeComDirectoryOnboardingController.class);
+                    assertThat(context).hasSingleBean(WeComDirectoryOnboardingController.class);
                 });
     }
 

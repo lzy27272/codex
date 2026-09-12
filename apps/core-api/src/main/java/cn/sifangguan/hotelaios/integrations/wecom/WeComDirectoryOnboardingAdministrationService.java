@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -31,9 +32,7 @@ import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardin
  * employee, assignment, role assignment and WeCom binding.
  */
 @Service
-@ConditionalOnProperty(
-        name = {"app.wecom.enabled", "app.wecom.directory-sync-enabled"}, havingValue = "true"
-)
+@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
 public class WeComDirectoryOnboardingAdministrationService {
     private static final Set<String> CANDIDATE_STATES = Set.of(
             "WAITING_PROFILE", "PENDING_APPROVAL", "CONFLICT",
@@ -53,7 +52,7 @@ public class WeComDirectoryOnboardingAdministrationService {
     private final WeComDirectorySecretCodec codec;
     private final WeComApiClient apiClient;
     private final WeComDirectoryOnboardingService employeeService;
-    private final WeComDirectoryEventProcessor eventProcessor;
+    private final Optional<WeComDirectoryEventProcessor> eventProcessor;
 
     public WeComDirectoryOnboardingAdministrationService(
             NamedParameterJdbcTemplate jdbc,
@@ -65,7 +64,7 @@ public class WeComDirectoryOnboardingAdministrationService {
             WeComDirectorySecretCodec codec,
             WeComApiClient apiClient,
             WeComDirectoryOnboardingService employeeService,
-            WeComDirectoryEventProcessor eventProcessor
+            Optional<WeComDirectoryEventProcessor> eventProcessor
     ) {
         this.jdbc = jdbc;
         this.databaseContext = databaseContext;
@@ -266,6 +265,8 @@ public class WeComDirectoryOnboardingAdministrationService {
     public DirectoryEventRetryResponse retryDirectoryEvent(
             UUID receiptId, RetryRequest request
     ) {
+        WeComDirectoryEventProcessor processor = eventProcessor.orElseThrow(() ->
+                new IllegalArgumentException("企业微信通讯录自动同步未启用，不能重试同步事件"));
         TenantPrincipal principal = prepare("wecom-binding.approve");
         List<DirectoryReceipt> rows = jdbc.query("""
                 select id, status, correlation_id, row_version,
@@ -305,7 +306,7 @@ public class WeComDirectoryOnboardingAdministrationService {
                         "reasonCode", "TECHNICAL_RETRY_REQUESTED",
                         "userIdentifierExposed", false
                 )));
-        runAfterCommit(() -> eventProcessor.processNew(receipt.id(), receipt.correlationId()));
+        runAfterCommit(() -> processor.processNew(receipt.id(), receipt.correlationId()));
         return new DirectoryEventRetryResponse(receipt.id(), "PROCESSING",
                 receipt.rowVersion() + 1, "技术异常已重新排队处理");
     }

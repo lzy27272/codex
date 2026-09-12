@@ -10,13 +10,12 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.UUID;
 
-/** Fail-closed configuration for directory callbacks and candidate onboarding. */
+/** Fail-closed configuration for manual onboarding and optional directory callbacks. */
 @Component
-@ConditionalOnProperty(
-        name = {"app.wecom.enabled", "app.wecom.directory-sync-enabled"}, havingValue = "true"
-)
+@ConditionalOnProperty(name = "app.wecom.enabled", havingValue = "true")
 public class WeComDirectoryProperties {
     private final WeComProperties wecom;
+    private final boolean directorySyncEnabled;
     private final String callbackToken;
     private final String callbackAesKey;
     private final String receiveId;
@@ -29,6 +28,7 @@ public class WeComDirectoryProperties {
 
     public WeComDirectoryProperties(
             WeComProperties wecom,
+            @Value("${app.wecom.directory-sync-enabled:false}") boolean directorySyncEnabled,
             @Value("${app.wecom.directory.callback-token:}") String callbackToken,
             @Value("${app.wecom.directory.callback-aes-key:}") String callbackAesKey,
             @Value("${app.wecom.directory.receive-id:}") String receiveId,
@@ -40,8 +40,11 @@ public class WeComDirectoryProperties {
             @Value("${app.wecom.directory.callback-clock-skew-seconds:600}") long callbackClockSkewSeconds
     ) {
         this.wecom = wecom;
-        this.callbackToken = required(callbackToken, "WECOM_DIRECTORY_CALLBACK_TOKEN");
-        this.callbackAesKey = required(callbackAesKey, "WECOM_DIRECTORY_CALLBACK_AES_KEY");
+        this.directorySyncEnabled = directorySyncEnabled;
+        this.callbackToken = directorySyncEnabled
+                ? required(callbackToken, "WECOM_DIRECTORY_CALLBACK_TOKEN") : optional(callbackToken);
+        this.callbackAesKey = directorySyncEnabled
+                ? required(callbackAesKey, "WECOM_DIRECTORY_CALLBACK_AES_KEY") : optional(callbackAesKey);
         this.receiveId = receiveId == null || receiveId.isBlank() ? wecom.corpId() : receiveId.trim();
         this.encryptionKey = required(encryptionKey, "WECOM_DIRECTORY_ENCRYPTION_KEY");
         this.oauthCallbackUrl = URI.create(required(
@@ -58,7 +61,7 @@ public class WeComDirectoryProperties {
 
     @PostConstruct
     void validate() {
-        if (callbackAesKey.length() != 43) {
+        if (directorySyncEnabled && callbackAesKey.length() != 43) {
             throw new IllegalStateException(
                     "WECOM_DIRECTORY_CALLBACK_AES_KEY must contain exactly 43 Base64 characters");
         }
@@ -80,6 +83,7 @@ public class WeComDirectoryProperties {
     }
 
     public UUID tenantId() { return wecom.tenantId(); }
+    public boolean directorySyncEnabled() { return directorySyncEnabled; }
     public String corpId() { return wecom.corpId(); }
     public long agentId() { return wecom.agentId(); }
     public URI frontendBaseUrl() { return wecom.frontendBaseUrl(); }
@@ -95,9 +99,13 @@ public class WeComDirectoryProperties {
 
     private static String required(String value, String name) {
         if (value == null || value.isBlank()) {
-            throw new IllegalStateException(name + " is required when directory sync is enabled");
+            throw new IllegalStateException(name + " is required when WeCom employee onboarding is enabled");
         }
         return value.trim();
+    }
+
+    private static String optional(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static long bounded(long value, long min, long max, String label) {

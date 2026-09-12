@@ -4,6 +4,7 @@ import cn.sifangguan.hotelaios.shared.audit.AuditWriter;
 import cn.sifangguan.hotelaios.shared.context.TenantPrincipal;
 import cn.sifangguan.hotelaios.shared.db.TenantDatabaseContext;
 import cn.sifangguan.hotelaios.shared.security.AccessPolicy;
+import cn.sifangguan.hotelaios.shared.security.PilotPasswordHasher;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import org.flywaydb.core.Flyway;
@@ -57,6 +58,7 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
     private static final UUID HOUSEKEEPING_POSITION = UUID.fromString("14000000-0000-0000-0000-000000000002");
     private static final String CORP_ID = "ww-directory-integration-test";
     private static final String ENCRYPTION_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+    private static final String TEST_PASSWORD_HASH = new PilotPasswordHasher().hash("Directory-Test-Password-2026");
 
     private static final EmbeddedPostgres POSTGRES = startPostgres();
     private static final DataSource DATA_SOURCE = POSTGRES.getPostgresDatabase();
@@ -180,6 +182,16 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
         assertThat(after.bindings() - before.bindings()).isOne();
         assertThat(jdbc.queryForObject(
                 "select count(*) from user_account where id = ?", Integer.class, approvedAccount)).isOne();
+        assertThat(jdbc.queryForMap("""
+                select login_name, password_hash, password_changed_at is not null as password_initialized
+                from user_account where id = ?
+                """, approvedAccount))
+                .containsEntry("login_name", "candidate." + candidateId)
+                .containsEntry("password_hash", TEST_PASSWORD_HASH)
+                .containsEntry("password_initialized", true);
+        assertThat(jdbc.queryForObject(
+                "select requested_password_hash is null from wecom_person_onboarding where id = ?",
+                Boolean.class, candidateId)).isTrue();
         assertThat(jdbc.queryForObject(
                 "select count(*) from employee where account_id = ?", Integer.class, approvedAccount)).isOne();
         assertThat(jdbc.queryForObject(
@@ -936,7 +948,8 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
                 WeComDirectorySecretCodec.sha256("session"), candidateId);
         WeComDirectoryOnboardingService lifecycle = new WeComDirectoryOnboardingService(
                 new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
-                properties, codec, mock(WeComApiClient.class), new ObjectMapper(), transactionManager);
+                properties, codec, mock(WeComApiClient.class), new ObjectMapper(),
+                new PilotPasswordHasher(), transactionManager);
 
         int expired = inTransaction(lifecycle::expireDueInvitations);
 
@@ -1043,7 +1056,8 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
 
         WeComDirectoryOnboardingService lifecycle = new WeComDirectoryOnboardingService(
                 new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
-                properties, codec, mock(WeComApiClient.class), new ObjectMapper(), transactionManager);
+                properties, codec, mock(WeComApiClient.class), new ObjectMapper(),
+                new PilotPasswordHasher(), transactionManager);
         assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
                 rename, renameReceipt, UUID.randomUUID()))).isTrue();
 
@@ -1084,7 +1098,8 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
         UUID receiptId = insertReceipt(disabled, occurredAt.plusSeconds(1));
         WeComDirectoryOnboardingService lifecycle = new WeComDirectoryOnboardingService(
                 new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
-                properties, codec, mock(WeComApiClient.class), new ObjectMapper(), transactionManager);
+                properties, codec, mock(WeComApiClient.class), new ObjectMapper(),
+                new PilotPasswordHasher(), transactionManager);
 
         assertThat(inTransaction(() -> lifecycle.handleDirectoryEvent(
                 disabled, receiptId, UUID.randomUUID()))).isTrue();
@@ -1252,7 +1267,9 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
                 "select row_version from wecom_person_onboarding where id = ?", Long.class, candidateId);
 
         SubmitResponse submitted = inTransaction(() -> lifecycle.submit(new SubmitRequest(
-                session, FRONT_DEPARTMENT, FRONT_POSITION, version)));
+                session, "New employee", "new.employee." + candidateId,
+                "Directory-Test-Password-2026", "Directory-Test-Password-2026",
+                FRONT_DEPARTMENT, FRONT_POSITION, version)));
 
         assertThat(submitted.status()).isEqualTo("CONFLICT");
         assertThat(jdbc.queryForObject(
@@ -1439,7 +1456,8 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
     private WeComDirectoryOnboardingService lifecycleService() {
         return new WeComDirectoryOnboardingService(
                 new NamedParameterJdbcTemplate(DATA_SOURCE), mock(TenantDatabaseContext.class),
-                properties, codec, mock(WeComApiClient.class), new ObjectMapper(), transactionManager);
+                properties, codec, mock(WeComApiClient.class), new ObjectMapper(),
+                new PilotPasswordHasher(), transactionManager);
     }
 
     private void makeCandidateApprovable(UUID candidateId, UUID orgUnitId, UUID positionId) {
@@ -1447,9 +1465,12 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
                 update wecom_person_onboarding
                 set status = 'PENDING_APPROVAL', requested_org_unit_id = ?,
                     requested_position_id = ?, identity_verified_at = now(),
-                    profile_submitted_at = now()
+                    profile_submitted_at = now(),
+                    requested_display_name = display_name,
+                    requested_login_name = ?, requested_password_hash = ?,
+                    registration_completed_at = now()
                 where id = ?
-                """, orgUnitId, positionId, candidateId);
+                """, orgUnitId, positionId, "candidate." + candidateId, TEST_PASSWORD_HASH, candidateId);
     }
 
     private void insertBinding(UUID bindingId, String userId, UUID accountId, UUID assignmentId) {
@@ -1484,11 +1505,15 @@ class WeComDirectoryOnboardingAdministrationServiceIntegrationTest {
                      display_name, onboarding_kind, source_binding_id, source_account_id,
                      directory_status, status, requested_org_unit_id, requested_position_id,
                      identity_verified_at, profile_submitted_at, conflicting_account_id,
+                     requested_display_name, requested_login_name, requested_password_hash,
+                     registration_completed_at,
                      source_event_hash, last_event_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, now(), now(), ?, ?, now())
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, now(), now(), ?,
+                        ?, ?, ?, now(), ?, now())
                 """, candidateId, TENANT, CORP_ID, codec.fingerprint(userId), codec.encrypt(userId),
                 "Directory integration test", onboardingKind, sourceBindingId, sourceAccountId,
                 status, orgUnitId, positionId, conflictingAccountId,
+                "Directory integration test", "candidate." + candidateId, TEST_PASSWORD_HASH,
                 WeComDirectorySecretCodec.sha256("event:" + candidateId));
     }
 

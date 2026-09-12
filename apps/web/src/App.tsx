@@ -998,7 +998,9 @@ function AuthenticatedApp({ onLogout }: { onLogout?: () => void }) {
       case 'wecom-bindings': legacyPage = <WecomUserBindingAdministration identity={activeIdentity} requestId={routeParams.requestId} onClearRequest={() => navigate('wecom-bindings')} />; break
       case 'wecom-onboarding': legacyPage = <WecomDirectoryOnboardingAdministration
         identity={activeIdentity}
-        canApprove={activePermissions.includes('*') || activePermissions.includes(permissionCodes.wecomBinding.approve)}
+        canApprove={activePermissions.includes('*')
+          || activePermissions.includes(permissionCodes.wecomBinding.approve)
+          || activePermissions.includes(permissionCodes.wecomBinding.onboardingReview)}
         canManage={activePermissions.includes('*') || activePermissions.includes(permissionCodes.wecomBinding.manage)}
         candidateId={routeParams.candidateId}
         directoryEventId={routeParams.directoryEventId}

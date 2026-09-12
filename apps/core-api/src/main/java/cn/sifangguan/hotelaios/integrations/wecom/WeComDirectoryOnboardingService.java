@@ -1,8 +1,10 @@
 package cn.sifangguan.hotelaios.integrations.wecom;
 
 import cn.sifangguan.hotelaios.shared.db.TenantDatabaseContext;
+import cn.sifangguan.hotelaios.shared.security.PilotPasswordHasher;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -27,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardingModels.*;
 
@@ -36,6 +39,7 @@ import static cn.sifangguan.hotelaios.integrations.wecom.WeComDirectoryOnboardin
 )
 public class WeComDirectoryOnboardingService {
     private static final int MAX_SECRET_LENGTH = 512;
+    private static final Pattern LOGIN_NAME = Pattern.compile("[a-z0-9][a-z0-9._-]{2,119}");
     private static final List<String> OPEN_STATES = List.of(
             "WAITING_PROFILE", "PENDING_APPROVAL", "CONFLICT");
     private final SecureRandom secureRandom = new SecureRandom();
@@ -45,6 +49,7 @@ public class WeComDirectoryOnboardingService {
     private final WeComDirectorySecretCodec codec;
     private final WeComApiClient apiClient;
     private final ObjectMapper objectMapper;
+    private final PilotPasswordHasher passwordHasher;
     private final TransactionTemplate isolatedTransaction;
 
     public WeComDirectoryOnboardingService(
@@ -54,6 +59,7 @@ public class WeComDirectoryOnboardingService {
             WeComDirectorySecretCodec codec,
             WeComApiClient apiClient,
             ObjectMapper objectMapper,
+            PilotPasswordHasher passwordHasher,
             PlatformTransactionManager transactionManager
     ) {
         this.jdbc = jdbc;
@@ -62,6 +68,7 @@ public class WeComDirectoryOnboardingService {
         this.codec = codec;
         this.apiClient = apiClient;
         this.objectMapper = objectMapper;
+        this.passwordHasher = passwordHasher;
         this.isolatedTransaction = new TransactionTemplate(transactionManager);
         this.isolatedTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -167,6 +174,7 @@ public class WeComDirectoryOnboardingService {
                     identity_verified_at = null, exchange_code_hash = null,
                     exchange_expires_at = null, session_token_hash = null,
                     session_expires_at = null, failure_code = 'INVITATION_EXPIRED',
+                    requested_password_hash = null,
                     row_version = candidate.row_version + 1
                 from due
                 where candidate.tenant_id = :tenantId and candidate.id = due.id
@@ -351,6 +359,7 @@ public class WeComDirectoryOnboardingService {
         apply();
         CandidateSession candidate = requireSession(sessionToken, false);
         return new OnboardingContext(candidate.id(), candidate.status(), candidate.displayName(),
+                candidate.requestedLoginName(), candidate.sourceAccountId() == null,
                 loadOptions(), candidate.rowVersion());
     }
 
@@ -362,6 +371,21 @@ public class WeComDirectoryOnboardingService {
             throw new IllegalArgumentException("申请已变化，请刷新后重试");
         }
         requireSelectable(request.orgUnitId(), request.positionId());
+        String requestedDisplayName = null;
+        String requestedLoginName = null;
+        String requestedPasswordHash = null;
+        if (candidate.sourceAccountId() == null) {
+            requestedDisplayName = requireDisplayName(request.displayName());
+            requestedLoginName = requireLoginName(request.loginName());
+            if (!MessageDigest.isEqual(
+                    safePassword(request.password()).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    safePassword(request.passwordConfirmation()).getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+                throw new IllegalArgumentException("两次输入的密码不一致");
+            }
+            passwordHasher.requirePassword(request.password());
+            requireAvailableLogin(requestedLoginName, candidate.id());
+            requestedPasswordHash = passwordHasher.hash(request.password());
+        }
         List<UUID> conflictingAccounts = jdbc.queryForList("""
                 select account_id
                 from wecom_user_binding
@@ -376,19 +400,32 @@ public class WeComDirectoryOnboardingService {
                 .addValue("sourceAccountId", candidate.sourceAccountId()), UUID.class);
         UUID conflictingAccountId = conflictingAccounts.isEmpty() ? null : conflictingAccounts.getFirst();
         String nextStatus = conflictingAccountId == null ? "PENDING_APPROVAL" : "CONFLICT";
-        int updated = jdbc.update("""
-                update wecom_person_onboarding
-                set status = :nextStatus, requested_org_unit_id = :orgUnitId,
-                    requested_position_id = :positionId, profile_submitted_at = now(),
-                    failure_code = :failureCode, conflicting_account_id = :conflictingAccountId,
-                    row_version = row_version + 1
-                where tenant_id = :tenantId and id = :id and row_version = :version
-                  and status in ('WAITING_PROFILE','PENDING_APPROVAL')
-                  and directory_status = 'ACTIVE' and identity_verified_at is not null
-                """, params().addValue("id", candidate.id()).addValue("version", request.expectedVersion())
-                .addValue("orgUnitId", request.orgUnitId()).addValue("positionId", request.positionId())
-                .addValue("nextStatus", nextStatus).addValue("conflictingAccountId", conflictingAccountId)
-                .addValue("failureCode", conflictingAccountId == null ? null : "USER_ID_ALREADY_BOUND"));
+        int updated;
+        try {
+            updated = jdbc.update("""
+                    update wecom_person_onboarding
+                    set status = :nextStatus, requested_org_unit_id = :orgUnitId,
+                        requested_position_id = :positionId, profile_submitted_at = now(),
+                        requested_display_name = :requestedDisplayName,
+                        requested_login_name = :requestedLoginName,
+                        requested_password_hash = :requestedPasswordHash,
+                        registration_completed_at = case when :requestedLoginName is null
+                            then null else now() end,
+                        failure_code = :failureCode, conflicting_account_id = :conflictingAccountId,
+                        row_version = row_version + 1
+                    where tenant_id = :tenantId and id = :id and row_version = :version
+                      and status in ('WAITING_PROFILE','PENDING_APPROVAL')
+                      and directory_status = 'ACTIVE' and identity_verified_at is not null
+                    """, params().addValue("id", candidate.id()).addValue("version", request.expectedVersion())
+                    .addValue("orgUnitId", request.orgUnitId()).addValue("positionId", request.positionId())
+                    .addValue("requestedDisplayName", requestedDisplayName)
+                    .addValue("requestedLoginName", requestedLoginName)
+                    .addValue("requestedPasswordHash", requestedPasswordHash)
+                    .addValue("nextStatus", nextStatus).addValue("conflictingAccountId", conflictingAccountId)
+                    .addValue("failureCode", conflictingAccountId == null ? null : "USER_ID_ALREADY_BOUND"));
+        } catch (DuplicateKeyException exception) {
+            throw new IllegalArgumentException("登录账号已被使用，请更换后重试");
+        }
         if (updated != 1) throw new IllegalArgumentException("申请已变化，请刷新后重试");
         if (conflictingAccountId == null) {
             notifyGovernance(candidate.id(), "WECOM_ONBOARDING_PENDING", "企业微信新员工待审核",
@@ -402,6 +439,7 @@ public class WeComDirectoryOnboardingService {
                 UUID.randomUUID(), Map.of("orgUnitId", request.orgUnitId(),
                         "positionId", request.positionId(),
                         "fingerprint", mask(candidate.fingerprint()),
+                        "accountRegistration", candidate.sourceAccountId() == null,
                         "status", nextStatus));
         return new SubmitResponse(candidate.id(), nextStatus,
                 request.expectedVersion() + 1, conflictingAccountId == null
@@ -709,6 +747,8 @@ public class WeComDirectoryOnboardingService {
                     session_expires_at = null, identity_verified_at = null,
                     requested_org_unit_id = null, requested_position_id = null,
                     profile_submitted_at = null, conflicting_account_id = null,
+                    requested_display_name = null, requested_login_name = null,
+                    requested_password_hash = null, registration_completed_at = null,
                     failure_code = :reason,
                     decision_reason = '企业微信人员身份已变更', row_version = row_version + 1
                 where candidate.tenant_id = :tenantId and candidate.corp_id = :corpId
@@ -787,6 +827,8 @@ public class WeComDirectoryOnboardingService {
                         exchange_expires_at = null, session_token_hash = null,
                         session_expires_at = null, requested_org_unit_id = null,
                         requested_position_id = null, profile_submitted_at = null,
+                        requested_display_name = null, requested_login_name = null,
+                        requested_password_hash = null, registration_completed_at = null,
                         conflicting_account_id = null,
                         failure_code = 'OAUTH_IDENTITY_MISMATCH',
                         decision_reason = '企业微信身份与入职邀请不匹配',
@@ -838,8 +880,8 @@ public class WeComDirectoryOnboardingService {
     private CandidateSession requireSession(String rawToken, boolean lock) {
         String suffix = lock ? " for update" : "";
         List<CandidateSession> rows = jdbc.query("""
-                select id, status, display_name, user_id_fingerprint,
-                       source_account_id, row_version
+                select id, status, coalesce(requested_display_name, display_name) as display_name,
+                       requested_login_name, user_id_fingerprint, source_account_id, row_version
                 from wecom_person_onboarding
                 where tenant_id = :tenantId and corp_id = :corpId
                   and session_token_hash = :sessionHash and session_expires_at > now()
@@ -848,6 +890,7 @@ public class WeComDirectoryOnboardingService {
                 """ + suffix, params().addValue("sessionHash", sha256(boundedSecret(rawToken))),
                 (rs, rowNum) -> new CandidateSession(rs.getObject("id", UUID.class),
                         rs.getString("status"), rs.getString("display_name"),
+                        rs.getString("requested_login_name"),
                         rs.getString("user_id_fingerprint"),
                         rs.getObject("source_account_id", UUID.class), rs.getLong("row_version")));
         if (rows.size() != 1) throw new IllegalArgumentException("入职会话已过期或不可继续");
@@ -1121,7 +1164,8 @@ public class WeComDirectoryOnboardingService {
                 join user_account account
                   on account.tenant_id = assignment.tenant_id and account.id = assignment.account_id
                 where assignment.tenant_id = :tenantId
-                  and role.code in ('CEO','PLATFORM_ADMIN','HR_KPI_ADMIN')
+                  and role.code in ('CEO','PLATFORM_ADMIN','HR_KPI_ADMIN',
+                                    'HR_ADMINISTRATION','HR_ADMINISTRATION_SUPERVISOR')
                   and assignment.valid_from <= now()
                   and (assignment.valid_to is null or assignment.valid_to >= now())
                   and account.status = 'ACTIVE'
@@ -1192,6 +1236,43 @@ public class WeComDirectoryOnboardingService {
         return value.trim();
     }
 
+    private String requireDisplayName(String value) {
+        String normalized = value == null ? null : value.trim();
+        if (normalized == null || normalized.isBlank() || normalized.length() > 120) {
+            throw new IllegalArgumentException("请填写不超过120个字符的员工姓名");
+        }
+        return normalized;
+    }
+
+    private String requireLoginName(String value) {
+        String normalized = value == null ? null : value.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalized == null || !LOGIN_NAME.matcher(normalized).matches()
+                || normalized.startsWith("system.") || normalized.startsWith("wecom.")) {
+            throw new IllegalArgumentException("登录账号须为3至120位字母、数字、点、下划线或短横线");
+        }
+        return normalized;
+    }
+
+    private void requireAvailableLogin(String loginName, UUID candidateId) {
+        Integer count = jdbc.queryForObject("""
+                select (
+                    (select count(*) from user_account
+                     where tenant_id = :tenantId and lower(login_name) = :loginName)
+                    +
+                    (select count(*) from wecom_person_onboarding
+                     where tenant_id = :tenantId and id <> :candidateId
+                       and lower(requested_login_name) = :loginName
+                       and status in ('WAITING_PROFILE','PENDING_APPROVAL','CONFLICT'))
+                )
+                """, params().addValue("loginName", loginName)
+                .addValue("candidateId", candidateId), Integer.class);
+        if (count != null && count > 0) {
+            throw new IllegalArgumentException("登录账号已被使用，请更换后重试");
+        }
+    }
+
+    private static String safePassword(String value) { return value == null ? "" : value; }
+
     private static String sha256(String value) { return WeComDirectorySecretCodec.sha256(value); }
     private static String mask(String fingerprint) {
         if (fingerprint == null || fingerprint.length() < 8) return null;
@@ -1238,6 +1319,7 @@ public class WeComDirectoryOnboardingService {
             UUID id,
             String status,
             String displayName,
+            String requestedLoginName,
             String fingerprint,
             UUID sourceAccountId,
             long rowVersion

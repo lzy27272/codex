@@ -69,6 +69,16 @@ test('reviewed aliases resolve without fuzzy role inference', () => {
   assert.equal(resolveRolePresentationPolicy('GROUP_ADMIN').key, 'PLATFORM_ADMIN')
 })
 
+test('both administrative HR roles can reach employee and WeCom onboarding administration', () => {
+  for (const roleCode of ['HR_ADMINISTRATION', 'HR_ADMINISTRATION_SUPERVISOR']) {
+    const modules = resolveRolePresentationPolicy(roleCode).desktopModuleIds
+    assert.ok(modules.includes('organization'), roleCode)
+    assert.ok(modules.includes('wecom-bindings'), roleCode)
+    assert.ok(modules.includes('wecom-onboarding'), roleCode)
+  }
+  assert.ok(!resolveRolePresentationPolicy('GROUP_CHAIRMAN').desktopModuleIds.includes('wecom-onboarding'))
+})
+
 test('account-wide semantics use the backend exact role allowlist, never UI aliases', () => {
   assert.equal(isFullAccountPresentationRole('PLATFORM_ADMIN'), true)
   assert.equal(isFullAccountPresentationRole('CEO'), true)

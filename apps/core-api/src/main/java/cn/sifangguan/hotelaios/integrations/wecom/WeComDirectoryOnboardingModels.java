@@ -44,12 +44,17 @@ public final class WeComDirectoryOnboardingModels {
 
     public record SubmitRequest(
             @NotBlank @Size(max = 512) String sessionToken,
+            @Size(max = 120) String displayName,
+            @Size(max = 120) String loginName,
+            @Size(max = 128) String password,
+            @Size(max = 128) String passwordConfirmation,
             @NotNull UUID orgUnitId,
             @NotNull UUID positionId,
             long expectedVersion
     ) {
         @Override public String toString() {
-            return "SubmitRequest[sessionToken=redacted, orgUnitId=" + orgUnitId
+            return "SubmitRequest[sessionToken=redacted, displayName=" + displayName
+                    + ", loginName=redacted, password=redacted, passwordConfirmation=redacted, orgUnitId=" + orgUnitId
                     + ", positionId=" + positionId + ", expectedVersion=" + expectedVersion + "]";
         }
     }
@@ -58,6 +63,8 @@ public final class WeComDirectoryOnboardingModels {
             UUID candidateId,
             String status,
             String displayName,
+            String loginName,
+            boolean requiresAccountRegistration,
             List<HotelOption> hotels,
             long rowVersion
     ) { }
@@ -77,6 +84,7 @@ public final class WeComDirectoryOnboardingModels {
             UUID id,
             String maskedFingerprint,
             String displayName,
+            String requestedLoginName,
             String onboardingKind,
             UUID requestedOrgUnitId,
             String requestedHotelName,

@@ -149,16 +149,20 @@ const POLICIES: Readonly<Record<RolePresentationKey, RolePresentationPolicy>> = 
     knownRole: true,
     focus: '行政人事团队工作、任务审核与计划审批',
     desktopModuleIds: modules(
-      'workbench', 'team-work', 'tasks', 'notifications', 'all-functions',
+      'workbench', 'team-work', 'tasks', 'organization', 'wecom-bindings',
+      'wecom-onboarding', 'notifications', 'all-functions',
     ),
-    mobileTabs: tabs('工作台', 'workbench', '团队', 'team-work'),
+    mobileTabs: tabs('人事', 'organization', '团队', 'team-work'),
   }),
   HR_ADMINISTRATION: Object.freeze({
     key: 'HR_ADMINISTRATION',
     knownRole: true,
     focus: '行政人事任务执行与个人工作',
-    desktopModuleIds: modules('workbench', 'tasks', 'notifications', 'all-functions'),
-    mobileTabs: tabs('工作台', 'workbench', '任务', 'tasks'),
+    desktopModuleIds: modules(
+      'workbench', 'tasks', 'organization', 'wecom-bindings',
+      'wecom-onboarding', 'notifications', 'all-functions',
+    ),
+    mobileTabs: tabs('人事', 'organization', '任务', 'tasks'),
   }),
   GROUP_CHAIRMAN: Object.freeze({
     key: 'GROUP_CHAIRMAN',

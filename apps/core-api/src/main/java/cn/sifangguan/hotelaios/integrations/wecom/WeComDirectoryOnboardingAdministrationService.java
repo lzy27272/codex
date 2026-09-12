@@ -81,12 +81,14 @@ public class WeComDirectoryOnboardingAdministrationService {
 
     @Transactional
     public CandidateList list(String requestedStatus) {
-        TenantPrincipal principal = prepare("wecom-binding.read");
+        TenantPrincipal principal = prepareAny("wecom-binding.read", "wecom-onboarding.review");
         employeeService.expireDueInvitations();
         String status = normalizeStatus(requestedStatus);
         MapSqlParameterSource parameters = base(principal).addValue("status", status);
         List<CandidateRow> rows = jdbc.query("""
-                select candidate.id, candidate.user_id_fingerprint, candidate.display_name,
+                select candidate.id, candidate.user_id_fingerprint,
+                       coalesce(candidate.requested_display_name, candidate.display_name) as display_name,
+                       candidate.requested_login_name,
                        candidate.onboarding_kind,
                        candidate.requested_org_unit_id,
                        hotel.name as requested_hotel_name,
@@ -128,7 +130,8 @@ public class WeComDirectoryOnboardingAdministrationService {
                     && !expiresAt.isAfter(OffsetDateTime.now().plusMinutes(30));
             return new CandidateRow(
                     rs.getObject("id", UUID.class), mask(rs.getString("user_id_fingerprint")),
-                    rs.getString("display_name"), rs.getString("onboarding_kind"),
+                    rs.getString("display_name"), rs.getString("requested_login_name"),
+                    rs.getString("onboarding_kind"),
                     rs.getObject("requested_org_unit_id", UUID.class),
                     rs.getString("requested_hotel_name"), rs.getString("requested_department_name"),
                     rs.getObject("requested_position_id", UUID.class),
@@ -272,6 +275,8 @@ public class WeComDirectoryOnboardingAdministrationService {
                     exchange_expires_at = null, session_token_hash = null,
                     session_expires_at = null, requested_org_unit_id = null,
                     requested_position_id = null, profile_submitted_at = null,
+                    requested_display_name = null, requested_login_name = null,
+                    requested_password_hash = null, registration_completed_at = null,
                     conflicting_account_id = null, failure_code = null,
                     decision_reason = null, row_version = row_version + 1
                 where tenant_id = :tenantId and corp_id = :corpId and id = :candidateId
@@ -305,7 +310,7 @@ public class WeComDirectoryOnboardingAdministrationService {
 
     @Transactional
     public ApprovalResponse approve(UUID candidateId, DecisionRequest request) {
-        TenantPrincipal principal = prepare("wecom-binding.approve");
+        TenantPrincipal principal = prepareAny("wecom-binding.approve", "wecom-onboarding.review");
         String fingerprint = candidateFingerprint(principal, candidateId);
         lockOnboardingIdentity(principal, fingerprint);
         Candidate candidate = lockCandidate(principal, candidateId);
@@ -379,14 +384,27 @@ public class WeComDirectoryOnboardingAdministrationService {
         UUID bindingId = sourceIdentity != null ? sourceIdentity.bindingId() : UUID.randomUUID();
         String compactAccountId = accountId.toString().replace("-", "");
         String compactEmployeeId = employeeId.toString().replace("-", "");
+        String displayName = sourceIdentity == null
+                ? required(candidate.requestedDisplayName(), "员工尚未完成姓名与账号注册")
+                : candidate.displayName();
+        String loginName = sourceIdentity == null
+                ? required(candidate.requestedLoginName(), "员工尚未完成登录账号注册")
+                : "wecom." + compactAccountId;
+        String passwordHash = sourceIdentity == null
+                ? required(candidate.requestedPasswordHash(), "员工尚未完成登录密码注册")
+                : null;
+        if (sourceIdentity == null && loginExists(principal, loginName)) {
+            throw new IllegalArgumentException("登录账号已被使用，请拒绝或让员工更换账号后重新提交");
+        }
         MapSqlParameterSource identity = base(principal)
                 .addValue("accountId", accountId)
                 .addValue("employeeId", employeeId)
                 .addValue("assignmentId", assignmentId)
                 .addValue("roleAssignmentId", roleAssignmentId)
                 .addValue("bindingId", bindingId)
-                .addValue("displayName", candidate.displayName())
-                .addValue("loginName", "wecom." + compactAccountId)
+                .addValue("displayName", displayName)
+                .addValue("loginName", loginName)
+                .addValue("passwordHash", passwordHash)
                 .addValue("employeeNo", "WECOM-" + compactEmployeeId)
                 .addValue("orgUnitId", candidate.orgUnitId())
                 .addValue("positionId", candidate.positionId())
@@ -404,8 +422,10 @@ public class WeComDirectoryOnboardingAdministrationService {
         if (sourceIdentity == null) {
             jdbc.update("""
                     insert into user_account
-                        (id, tenant_id, login_name, display_name, status)
-                    values (:accountId, :tenantId, :loginName, :displayName, 'ACTIVE')
+                        (id, tenant_id, login_name, display_name, status,
+                         password_hash, password_changed_at)
+                    values (:accountId, :tenantId, :loginName, :displayName, 'ACTIVE',
+                            :passwordHash, now())
                     """, identity);
             jdbc.update("""
                     insert into employee
@@ -481,6 +501,7 @@ public class WeComDirectoryOnboardingAdministrationService {
                     browser_verifier_hash = null, provider_code_hash = null,
                     exchange_code_hash = null, exchange_expires_at = null,
                     session_token_hash = null, session_expires_at = null,
+                    requested_password_hash = null,
                     row_version = row_version + 1
                 where tenant_id = :tenantId and id = :candidateId
                   and row_version = :expectedVersion
@@ -552,7 +573,7 @@ public class WeComDirectoryOnboardingAdministrationService {
 
     @Transactional
     public ApprovalResponse reject(UUID candidateId, DecisionRequest request) {
-        TenantPrincipal principal = prepare("wecom-binding.approve");
+        TenantPrincipal principal = prepareAny("wecom-binding.approve", "wecom-onboarding.review");
         Candidate candidate = lockCandidate(principal, candidateId);
         if ("REJECTED".equals(candidate.status())) {
             return new ApprovalResponse(candidate.id(), null, "REJECTED", null,
@@ -574,6 +595,7 @@ public class WeComDirectoryOnboardingAdministrationService {
                     browser_verifier_hash = null, provider_code_hash = null,
                     exchange_code_hash = null, exchange_expires_at = null,
                     session_token_hash = null, session_expires_at = null,
+                    requested_password_hash = null,
                     row_version = row_version + 1
                 where tenant_id = :tenantId and id = :candidateId
                   and row_version = :expectedVersion
@@ -722,6 +744,8 @@ public class WeComDirectoryOnboardingAdministrationService {
                     exchange_expires_at = null, session_token_hash = null,
                     session_expires_at = null, requested_org_unit_id = null,
                     requested_position_id = null, profile_submitted_at = null,
+                    requested_display_name = null, requested_login_name = null,
+                    requested_password_hash = null, registration_completed_at = null,
                     conflicting_account_id = null,
                     failure_code = 'SUPERSEDED_BY_DIRECTORY_EVENT',
                     decision_reason = '企业微信人员目录状态已更新',
@@ -746,7 +770,9 @@ public class WeComDirectoryOnboardingAdministrationService {
 
     private Candidate lockCandidate(TenantPrincipal principal, UUID candidateId) {
         List<Candidate> rows = jdbc.query("""
-                select id, status, display_name, user_id_fingerprint, user_id_ciphertext,
+                select id, status, display_name, requested_display_name,
+                       requested_login_name, requested_password_hash,
+                       user_id_fingerprint, user_id_ciphertext,
                        onboarding_kind, source_binding_id, source_account_id,
                        directory_status, failure_code, invitation_expires_at,
                        requested_org_unit_id, requested_position_id, conflicting_account_id,
@@ -757,7 +783,9 @@ public class WeComDirectoryOnboardingAdministrationService {
                 for update
                 """, base(principal).addValue("candidateId", candidateId), (rs, rowNum) -> new Candidate(
                 rs.getObject("id", UUID.class), rs.getString("status"),
-                rs.getString("display_name"), rs.getString("user_id_fingerprint"),
+                rs.getString("display_name"), rs.getString("requested_display_name"),
+                rs.getString("requested_login_name"), rs.getString("requested_password_hash"),
+                rs.getString("user_id_fingerprint"),
                 rs.getString("user_id_ciphertext"),
                 rs.getString("onboarding_kind"),
                 rs.getObject("source_binding_id", UUID.class),
@@ -1008,7 +1036,8 @@ public class WeComDirectoryOnboardingAdministrationService {
                 join user_account account
                   on account.tenant_id = assignment.tenant_id and account.id = assignment.account_id
                 where assignment.tenant_id = :tenantId
-                  and role.code in ('CEO','PLATFORM_ADMIN','HR_KPI_ADMIN')
+                  and role.code in ('CEO','PLATFORM_ADMIN','HR_KPI_ADMIN',
+                                    'HR_ADMINISTRATION','HR_ADMINISTRATION_SUPERVISOR')
                   and assignment.valid_from <= now()
                   and (assignment.valid_to is null or assignment.valid_to >= now())
                   and account.status = 'ACTIVE'
@@ -1058,6 +1087,15 @@ public class WeComDirectoryOnboardingAdministrationService {
     private TenantPrincipal prepare(String permission) {
         accessPolicy.requirePermission(permission);
         TenantPrincipal principal = accessPolicy.principal();
+        return prepareTenant(principal);
+    }
+
+    private TenantPrincipal prepareAny(String... permissions) {
+        accessPolicy.requireAnyPermission(permissions);
+        return prepareTenant(accessPolicy.principal());
+    }
+
+    private TenantPrincipal prepareTenant(TenantPrincipal principal) {
         if (!properties.tenantId().equals(principal.tenantId())) {
             throw new IllegalArgumentException("企业微信目录同步与当前租户不匹配");
         }
@@ -1153,6 +1191,14 @@ public class WeComDirectoryOnboardingAdministrationService {
         return value;
     }
 
+    private boolean loginExists(TenantPrincipal principal, String loginName) {
+        Integer count = jdbc.queryForObject("""
+                select count(*) from user_account
+                where tenant_id = :tenantId and lower(login_name) = lower(:loginName)
+                """, base(principal).addValue("loginName", loginName), Integer.class);
+        return count != null && count > 0;
+    }
+
     private static IllegalArgumentException stale() {
         return new IllegalArgumentException("申请已变化，请刷新后重试");
     }
@@ -1164,7 +1210,9 @@ public class WeComDirectoryOnboardingAdministrationService {
     }
 
     private record Candidate(
-            UUID id, String status, String displayName, String fingerprint,
+            UUID id, String status, String displayName,
+            String requestedDisplayName, String requestedLoginName, String requestedPasswordHash,
+            String fingerprint,
             String userIdCiphertext, String onboardingKind,
             UUID sourceBindingId, UUID sourceAccountId,
             String directoryStatus, String failureCode, OffsetDateTime invitationExpiresAt,

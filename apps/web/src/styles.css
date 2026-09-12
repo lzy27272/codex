@@ -415,8 +415,12 @@ dd { margin: 5px 0 0; color: #334f64; font-size: 10px; }
 .wecom-onboarding-card > h2 { margin: -4px 0 0; color: #123451; font-size: 22px; text-align: center; }
 .wecom-onboarding-card > p { margin: -9px 0 3px; color: #667d90; font-size: 13px; line-height: 1.65; }
 .wecom-onboarding-card > label { display: grid; gap: 8px; color: #163b58; font-size: 13px; font-weight: 700; }
-.wecom-onboarding-card select { width: 100%; min-height: 51px; padding: 0 42px 0 15px; color: #173a57; border: 1px solid #d7e1e8; border-radius: 11px; outline: 0; background: #fff; }
-.wecom-onboarding-card select:focus { border-color: #649cc7; box-shadow: 0 0 0 3px rgba(26,111,176,.1); }
+.wecom-onboarding-card select, .wecom-onboarding-card input { width: 100%; min-height: 51px; padding: 0 15px; color: #173a57; border: 1px solid #d7e1e8; border-radius: 11px; outline: 0; background: #fff; }
+.wecom-onboarding-card select { padding-right: 42px; }
+.wecom-onboarding-card select:focus, .wecom-onboarding-card input:focus { border-color: #649cc7; box-shadow: 0 0 0 3px rgba(26,111,176,.1); }
+.onboarding-registration-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 16px; border: 1px solid #e1e8ee; border-radius: 13px; background: #f8fbfd; }
+.onboarding-registration-fields label { display: grid; gap: 7px; color: #163b58; font-size: 12px; font-weight: 700; }
+.onboarding-registration-fields .field-error { grid-column: 1 / -1; color: #b33b3b; }
 .wecom-onboarding-card > button { min-height: 52px; font-size: 15px; font-weight: 800; }
 .onboarding-person { min-height: 82px; padding: 14px 16px; display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 12px; border: 1px solid #dfe7ed; border-radius: 12px; }
 .onboarding-person i { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; color: #174f7b; background: #edf4fb; font-style: normal; font-size: 11px; }

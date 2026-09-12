@@ -90,6 +90,7 @@ export const permissions = Object.freeze({
     read: 'wecom-binding.read',
     manage: 'wecom-binding.manage',
     approve: 'wecom-binding.approve',
+    onboardingReview: 'wecom-onboarding.review',
   },
   workPlan: {
     read: 'work-plan.read',

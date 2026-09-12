@@ -9,6 +9,8 @@ export type DirectoryOnboardingContext = {
   candidateId: string
   status: DirectoryOnboardingStatus
   displayName: string
+  loginName?: string
+  requiresAccountRegistration: boolean
   hotels: DirectoryHotelOption[]
   rowVersion: number
 }
@@ -22,6 +24,7 @@ export type DirectoryCandidate = {
   id: string
   maskedFingerprint: string
   displayName: string
+  requestedLoginName?: string
   requestedHotelName?: string
   requestedDepartmentName?: string
   requestedPositionName?: string
@@ -95,9 +98,19 @@ export function loadDirectoryOnboardingContext(sessionToken: string) {
   return publicPost<DirectoryOnboardingContext>('/integrations/wecom/directory-onboarding/context', { sessionToken })
 }
 
-export function submitDirectoryOnboarding(sessionToken: string, orgUnitId: string, positionId: string, expectedVersion: number) {
+export function submitDirectoryOnboarding(
+  sessionToken: string,
+  displayName: string,
+  loginName: string,
+  password: string,
+  passwordConfirmation: string,
+  orgUnitId: string,
+  positionId: string,
+  expectedVersion: number,
+) {
   return publicPost<DirectoryOnboardingSubmitResponse>('/integrations/wecom/directory-onboarding/submit', {
-    sessionToken, orgUnitId, positionId, expectedVersion,
+    sessionToken, displayName, loginName, password, passwordConfirmation,
+    orgUnitId, positionId, expectedVersion,
   })
 }
 

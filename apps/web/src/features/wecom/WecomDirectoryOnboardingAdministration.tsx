@@ -14,7 +14,7 @@ import {
 } from './directoryOnboardingApi'
 
 const labels: Record<DirectoryOnboardingStatus, string> = {
-  WAITING_PROFILE: '待员工完善', PENDING_APPROVAL: '待管理员确认', CONFLICT: '异常绑定',
+  WAITING_PROFILE: '待员工填写', PENDING_APPROVAL: '待中台审核', CONFLICT: '异常绑定',
   APPROVED: '已启用', REJECTED: '已拒绝', CANCELLED: '已取消', EXPIRED: '已过期',
 }
 
@@ -53,7 +53,7 @@ export function WecomDirectoryOnboardingAdministration({
     try {
       const [candidates, events] = await Promise.all([
         loadDirectoryCandidates(identity, status || undefined),
-        loadDirectoryEvents(identity),
+        canManage ? loadDirectoryEvents(identity) : Promise.resolve([]),
       ])
       setItems(candidates)
       setDirectoryEvents(events)
@@ -75,7 +75,7 @@ export function WecomDirectoryOnboardingAdministration({
 
   const visible = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    return items.filter((item) => !normalized || `${item.displayName} ${item.requestedHotelName ?? ''} ${item.requestedPositionName ?? ''}`.toLowerCase().includes(normalized))
+    return items.filter((item) => !normalized || `${item.displayName} ${item.requestedLoginName ?? ''} ${item.requestedHotelName ?? ''} ${item.requestedPositionName ?? ''}`.toLowerCase().includes(normalized))
   }, [items, query])
   const count = (value: DirectoryOnboardingStatus) => items.filter((item) => item.status === value).length
 
@@ -145,18 +145,18 @@ export function WecomDirectoryOnboardingAdministration({
   }
 
   return <section className="page-section directory-onboarding-admin">
-    <header className="page-title"><div><span className="eyebrow">WECOM ONBOARDING</span><h1>企业微信入职审核</h1><p>新成员自动进入候选队列；员工补充门店岗位后，由管理员确认启用。</p></div><div className="page-actions"><span className="source-flag api">UserID 仅显示脱敏指纹</span><button className="secondary" onClick={() => void reload()}>刷新</button></div></header>
+    <header className="page-title"><div><span className="eyebrow">WECOM ONBOARDING</span><h1>企业微信入职审核</h1><p>新成员自动进入候选队列；员工注册账号并填写任职后，由行政人事或行政人事主管审核。</p></div><div className="page-actions"><span className="source-flag api">UserID 仅显示脱敏指纹</span><button className="secondary" onClick={() => void reload()}>刷新</button></div></header>
     <div className="inline-warning page-error">入职审核只创建人员账号、任职和个人企微绑定，不会自动开启企业微信群推送。</div>
     {notice && <div className="inline-success page-error">{notice}</div>}{error && <div className="inline-error page-error">{error}</div>}
     <div className="directory-onboarding-metrics">{[
-      ['待员工完善', count('WAITING_PROFILE'), 'waiting'], ['待管理员确认', count('PENDING_APPROVAL'), 'approval'],
+      ['待员工填写', count('WAITING_PROFILE'), 'waiting'], ['待中台审核', count('PENDING_APPROVAL'), 'approval'],
       ['已启用', count('APPROVED'), 'approved'], ['异常', count('CONFLICT'), 'conflict'],
     ].map(([label, value, tone]) => <article key={String(label)}><span>{label}</span><strong className={String(tone)}>{value}</strong></article>)}</div>
     <article className="panel table-panel"><header><div><span className="panel-kicker">NEW EMPLOYEE REVIEW</span><h2>入职申请</h2></div></header>
       <div className="directory-onboarding-filters"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option>{Object.entries(labels).map(([key, value]) => <option key={key} value={key}>{value}</option>)}</select><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="员工、门店或岗位" /></div>
       {loading ? <div className="state-card"><div className="spinner"/><strong>正在读取入职申请</strong></div> : !visible.length ? <div className="state-card"><b>◇</b><strong>当前没有入职申请</strong><span>企业微信新增成员后会自动出现在这里。</span></div> : <div className="directory-onboarding-table">
         <div className="directory-onboarding-head"><span>员工</span><span>申请门店</span><span>申请岗位</span><span>提交时间</span><span>状态</span><span>操作</span></div>
-        {visible.map((item) => <div key={item.id}><span><strong>{item.displayName}</strong><small>{item.maskedFingerprint}</small></span><span>{item.requestedHotelName ?? '待员工选择'}</span><span>{[item.requestedDepartmentName,item.requestedPositionName].filter(Boolean).join(' · ') || '待员工选择'}</span><span>{displayTime(item.updatedAt)}{item.invitationExpiresAt && ['WAITING_PROFILE', 'EXPIRED'].includes(item.status) && <small>{item.status === 'EXPIRED' ? '邀请已失效' : `有效期至 ${displayTime(item.invitationExpiresAt)}`}</small>}</span><span><b className={`status-pill ${item.status.toLowerCase().replaceAll('_','-')}`}>{item.expiringSoon ? '即将过期' : labels[item.status]}</b>{item.suggestedAction && <small>{item.suggestedAction}</small>}</span><span><button className="link-button" onClick={() => setSelected(item)}>{['PENDING_APPROVAL', 'CONFLICT'].includes(item.status) ? '审核' : item.retryable ? '处理故障' : item.canRegenerate ? '重新生成' : '查看'}</button></span></div>)}
+        {visible.map((item) => <div key={item.id}><span><strong>{item.displayName}</strong><small>{item.requestedLoginName ? `账号：${item.requestedLoginName}` : item.maskedFingerprint}</small></span><span>{item.requestedHotelName ?? '待员工选择'}</span><span>{[item.requestedDepartmentName,item.requestedPositionName].filter(Boolean).join(' · ') || '待员工选择'}</span><span>{displayTime(item.updatedAt)}{item.invitationExpiresAt && ['WAITING_PROFILE', 'EXPIRED'].includes(item.status) && <small>{item.status === 'EXPIRED' ? '邀请已失效' : `有效期至 ${displayTime(item.invitationExpiresAt)}`}</small>}</span><span><b className={`status-pill ${item.status.toLowerCase().replaceAll('_','-')}`}>{item.expiringSoon ? '即将过期' : labels[item.status]}</b>{item.suggestedAction && <small>{item.suggestedAction}</small>}</span><span><button className="link-button" onClick={() => setSelected(item)}>{['PENDING_APPROVAL', 'CONFLICT'].includes(item.status) ? '审核' : item.retryable ? '处理故障' : item.canRegenerate ? '重新生成' : '查看'}</button></span></div>)}
       </div>}
     </article>
     <article className="panel table-panel directory-event-panel"><header><div><span className="panel-kicker">DIRECTORY SYNC EXCEPTIONS</span><h2>人员同步技术异常</h2><p>仅显示脱敏原因和建议动作；身份冲突仍须走审核流程，不能在这里重试。</p></div><span className={`status-pill ${directoryEvents.length ? 'conflict' : 'approved'}`}>{directoryEvents.length ? `${directoryEvents.length} 项待处理` : '运行正常'}</span></header>
@@ -166,11 +166,11 @@ export function WecomDirectoryOnboardingAdministration({
     </article>
     {selected && <div className="drawer-backdrop"><aside className="drawer onboarding-review-drawer"><header><div><span className="panel-kicker">EMPLOYEE REVIEW</span><h2>确认员工任职</h2></div><button className="close" onClick={() => { setSelected(undefined); onClearTarget?.() }}>×</button></header><div className="drawer-body">
       <div className="onboarding-review-person"><strong>{selected.displayName}</strong><span>企业微信身份已验证</span><code>{selected.maskedFingerprint}</code></div>
-      <dl><div><dt>申请门店</dt><dd>{selected.requestedHotelName ?? '未选择'}</dd></div><div><dt>所属部门</dt><dd>{selected.requestedDepartmentName ?? '未选择'}</dd></div><div><dt>申请岗位</dt><dd>{selected.requestedPositionName ?? '未选择'}</dd></div><div><dt>当前状态</dt><dd>{labels[selected.status]}</dd></div></dl>
+      <dl><div><dt>注册账号</dt><dd>{selected.requestedLoginName ?? '既有账号任职变更'}</dd></div><div><dt>申请门店</dt><dd>{selected.requestedHotelName ?? '未选择'}</dd></div><div><dt>所属部门</dt><dd>{selected.requestedDepartmentName ?? '未选择'}</dd></div><div><dt>申请岗位</dt><dd>{selected.requestedPositionName ?? '未选择'}</dd></div><div><dt>当前状态</dt><dd>{labels[selected.status]}</dd></div></dl>
       {selected.status === 'CONFLICT' && <div className="inline-error">该企业微信身份已绑定其他中台账号。仅可在填写原因并完成两次确认后转移；原账号会话会立即失效。</div>}
       {selected.suggestedAction && <div className={selected.retryable || selected.status === 'EXPIRED' ? 'inline-warning' : 'inline-error'}>{selected.suggestedAction}</div>}
-      {!canApprove && ['PENDING_APPROVAL', 'CONFLICT'].includes(selected.status) && <div className="inline-warning">当前账号只有查看权限，请由集团 CEO、平台管理员或人事岗位完成审核。</div>}
-      <div className="inline-warning">确认后将原子创建或启用中台账号、任职和企业微信绑定；不会开启群推送。</div>
+      {!canApprove && ['PENDING_APPROVAL', 'CONFLICT'].includes(selected.status) && <div className="inline-warning">当前账号只有查看权限，请由行政人事或行政人事主管完成审核。</div>}
+      <div className="inline-warning">确认后将原子创建或启用员工档案、账号、任职、岗位权限和企业微信绑定；不会开启群推送。</div>
     </div><footer><button className="secondary" onClick={() => { setSelected(undefined); onClearTarget?.() }}>取消</button>{canManage && selected.retryable && <button className="primary" disabled={busy} onClick={() => void retry('retry')}>{busy ? '处理中…' : '技术重试'}</button>}{canManage && selected.canRegenerate && <button className="primary" disabled={busy} onClick={() => void retry('regenerate')}>{busy ? '处理中…' : '重新生成邀请'}</button>}{canApprove && ['PENDING_APPROVAL','CONFLICT'].includes(selected.status) && <button className="secondary" disabled={busy} onClick={() => void reject()}>拒绝</button>}{canApprove && ['PENDING_APPROVAL','CONFLICT'].includes(selected.status) && <button className="primary" disabled={busy} onClick={() => void approve()}>{busy ? '处理中…' : selected.status === 'CONFLICT' ? '确认转移并启用' : '确认启用'}</button>}</footer></aside></div>}
   </section>
 }

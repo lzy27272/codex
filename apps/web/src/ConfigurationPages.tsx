@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiRequest, asList } from './api/client'
 import type { RoleContext, RouteParams } from './domain'
 import { PositionAdministration } from './features/organization/PositionAdministration'
+import { isEmployeePermanentDeleteConfirmation } from './features/organization/employeeDeleteConfirmation'
 
 type Row = Record<string, unknown>
 type OrgUnit = { id: string; parentId?: string; code: string; name: string; unitType: string; status: string; sortOrder: number; propertyCode?: string; city?: string; roomCount?: number; openingDate?: string }
@@ -154,8 +155,8 @@ export function OrganizationCenter({ identity, permissions, routeParams = {} }: 
     if (await runMaintenance(() => apiRequest(`/org/employees/${item.id}/restore`, identity, { method: 'POST', body: '{}' }), '恢复员工失败', `“${item.name}”已恢复并保持停用`)) setEmployeeView('current')
   }
   const permanentlyDeleteEmployee = async (item: Employee) => {
-    const confirmation = window.prompt(`永久删除不可撤销。系统将清除“${item.name}”的账号身份与个人信息，只保留匿名业务和审计历史。\n\n请输入员工编号 ${item.employeeNo} 确认：`)
-    if (confirmation !== item.employeeNo) return
+    const confirmation = window.prompt(`永久删除不可撤销。系统将清除“${item.name}”的账号身份与个人信息，只保留匿名业务和审计历史。\n\n请输入“确认”后继续：`)
+    if (!isEmployeePermanentDeleteConfirmation(confirmation)) return
     await runMaintenance(() => apiRequest(`/org/employees/${item.id}/permanent`, identity, { method: 'DELETE' }), '永久删除员工失败', `“${item.name}”已永久删除，无法找回`)
   }
   const submit = async () => {

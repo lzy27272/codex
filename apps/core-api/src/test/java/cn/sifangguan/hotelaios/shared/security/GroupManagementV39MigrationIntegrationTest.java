@@ -76,6 +76,7 @@ class GroupManagementV39MigrationIntegrationTest {
                     .dataSource(dataSource)
                     .locations("classpath:db/migration")
                     .cleanDisabled(true)
+                    .target("39")
                     .load()
                     .migrate()
                     .migrationsExecuted;

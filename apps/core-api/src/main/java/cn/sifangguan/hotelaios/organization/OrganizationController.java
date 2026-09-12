@@ -101,4 +101,12 @@ public class OrganizationController {
     ) {
         return service.assignPosition(employeeId, request);
     }
+
+    @PutMapping("/assignments/{assignmentId}/hotel-scope")
+    public Map<String, Object> updateAssignmentHotelScope(
+            @PathVariable UUID assignmentId,
+            @Valid @RequestBody OrganizationModels.UpdateAssignmentHotelScope request
+    ) {
+        return service.updateAssignmentHotelScope(assignmentId, request);
+    }
 }

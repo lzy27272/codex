@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 public final class OrganizationModels {
@@ -80,7 +81,25 @@ public final class OrganizationModels {
             Boolean primary,
             String assignmentType,
             @NotNull LocalDate validFrom,
-            LocalDate validTo
+            LocalDate validTo,
+            List<@NotNull UUID> responsibleHotelIds
+    ) {
+        public CreatePositionAssignment(
+                UUID orgUnitId,
+                UUID positionId,
+                UUID managerAssignmentId,
+                Boolean primary,
+                String assignmentType,
+                LocalDate validFrom,
+                LocalDate validTo
+        ) {
+            this(orgUnitId, positionId, managerAssignmentId, primary,
+                    assignmentType, validFrom, validTo, null);
+        }
+    }
+
+    public record UpdateAssignmentHotelScope(
+            List<@NotNull UUID> responsibleHotelIds
     ) {
     }
 }

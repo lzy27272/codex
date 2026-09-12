@@ -223,22 +223,41 @@ public class OrganizationService {
         accessPolicy.requirePermission("org.read");
         TenantPrincipal principal = prepare();
         return jdbc.queryForList("""
-                select id, code, name, job_family, level_code, status
-                from position_definition
-                where tenant_id = :tenantId
-                  and deleted_at is null and permanently_deleted_at is null
+                select position.id, position.code, position.name, position.job_family,
+                       position.level_code, position.status,
+                       position.applies_to_all_hotels,
+                       published.authorization_scope_type,
+                       applicable_scope.applicable_hotel_ids
+                from position_definition position
+                join position_function_profile profile
+                  on profile.tenant_id = position.tenant_id
+                 and profile.position_id = position.id
+                 and profile.scope_type = 'GROUP'
+                join position_function_profile_version published
+                  on published.tenant_id = profile.tenant_id
+                 and published.profile_id = profile.id
+                 and published.lifecycle_status = 'PUBLISHED'
+                left join lateral (
+                    select string_agg(applicable.hotel_org_unit_id::text, ','
+                                      order by applicable.hotel_org_unit_id) as applicable_hotel_ids
+                    from position_applicable_hotel applicable
+                    where applicable.tenant_id = position.tenant_id
+                      and applicable.position_id = position.id
+                ) applicable_scope on true
+                where position.tenant_id = :tenantId
+                  and position.deleted_at is null and position.permanently_deleted_at is null
                   and exists (
                     select 1
-                    from position_function_profile profile
-                    join position_function_profile_version published
-                      on published.tenant_id = profile.tenant_id
-                     and published.profile_id = profile.id
-                     and published.lifecycle_status = 'PUBLISHED'
-                    where profile.tenant_id = position_definition.tenant_id
-                      and profile.position_id = position_definition.id
-                      and profile.scope_type = 'GROUP'
+                    from position_function_profile visible_profile
+                    join position_function_profile_version visible_published
+                      on visible_published.tenant_id = visible_profile.tenant_id
+                     and visible_published.profile_id = visible_profile.id
+                     and visible_published.lifecycle_status = 'PUBLISHED'
+                    where visible_profile.tenant_id = position.tenant_id
+                      and visible_profile.position_id = position.id
+                      and visible_profile.scope_type = 'GROUP'
                   )
-                order by job_family, level_code, name
+                order by position.job_family, position.level_code, position.name
                 """, base(principal));
     }
 
@@ -336,13 +355,30 @@ public class OrganizationService {
                        e.employee_no, e.name, e.mobile, e.employment_status, e.hired_on,
                        a.id as assignment_id, a.is_primary, a.valid_from, a.valid_to,
                        o.id as org_unit_id, o.name as org_unit_name,
-                       p.id as position_id, p.name as position_name
+                       p.id as position_id, p.name as position_name,
+                       published.authorization_scope_type,
+                       assigned_scope.responsible_hotel_ids,
+                       assigned_scope.responsible_hotel_names
                 from employee e
                 left join user_account u on u.tenant_id = e.tenant_id and u.id = e.account_id
                 left join employee_position_assignment a
                   on a.tenant_id = e.tenant_id and a.employee_id = e.id and a.status = 'ACTIVE'
                 left join org_unit o on o.tenant_id = a.tenant_id and o.id = a.org_unit_id
                 left join position_definition p on p.tenant_id = a.tenant_id and p.id = a.position_id
+                left join position_function_profile profile
+                  on profile.tenant_id = p.tenant_id and profile.position_id = p.id
+                 and profile.scope_type = 'GROUP'
+                left join position_function_profile_version published
+                  on published.tenant_id = profile.tenant_id and published.profile_id = profile.id
+                 and published.lifecycle_status = 'PUBLISHED'
+                left join lateral (
+                    select string_agg(scope.hotel_org_unit_id::text, ',' order by hotel.name) as responsible_hotel_ids,
+                           string_agg(hotel.name, '、' order by hotel.name) as responsible_hotel_names
+                    from employee_assignment_hotel_scope scope
+                    join org_unit hotel
+                      on hotel.tenant_id = scope.tenant_id and hotel.id = scope.hotel_org_unit_id
+                    where scope.tenant_id = a.tenant_id and scope.assignment_id = a.id
+                ) assigned_scope on true
                 where e.tenant_id = :tenantId and e.deleted_at is null
                 """ + visibility + " order by e.name, a.is_primary desc", parameters);
     }
@@ -721,6 +757,9 @@ public class OrganizationService {
         PositionRoleGrant positionGrant = lockActivePublishedPosition(principal, request.positionId());
         requirePositionApplicableToOrganization(principal, request.positionId(), request.orgUnitId());
         accessPolicy.requireOrgScope(request.orgUnitId());
+        Set<UUID> responsibleHotelIds = validateResponsibleHotels(
+                principal, request.positionId(), positionGrant.scopeType(), request.responsibleHotelIds(),
+                request.orgUnitId());
         UUID accountId = lockActiveEmployeeAccount(principal, employeeId);
 
         int previousPrimaryCount = 0;
@@ -771,13 +810,59 @@ public class OrganizationService {
                           else (cast(:validTo as date) + interval '1 day')::timestamptz end,
                      :actorId, 'POSITION_ASSIGNMENT', :id)
                 """, parameters);
+        replaceAssignmentHotelScope(principal, id, responsibleHotelIds);
         if (previousPrimaryCount > 0) {
             auditWriter.record("POSITION_PRIMARY_ASSIGNMENT_SWITCHED", "EMPLOYEE", employeeId,
                     "{\"previousPrimaryCount\":" + previousPrimaryCount
                             + ",\"newAssignmentId\":\"" + id + "\"}");
         }
         return Map.of("id", id, "employeeId", employeeId, "orgUnitId", request.orgUnitId(),
-                "positionId", request.positionId(), "roleAssignmentId", roleAssignmentId);
+                "positionId", request.positionId(), "roleAssignmentId", roleAssignmentId,
+                "responsibleHotelIds", List.copyOf(responsibleHotelIds));
+    }
+
+    @Transactional
+    public Map<String, Object> updateAssignmentHotelScope(
+            UUID assignmentId,
+            OrganizationModels.UpdateAssignmentHotelScope request
+    ) {
+        accessPolicy.requirePermission("org.manage");
+        TenantPrincipal principal = prepare();
+        List<Map<String, Object>> assignments = jdbc.queryForList("""
+                select assignment.position_id, assignment.org_unit_id,
+                       published.authorization_scope_type
+                from employee_position_assignment assignment
+                join position_definition position
+                  on position.tenant_id = assignment.tenant_id
+                 and position.id = assignment.position_id
+                 and position.status = 'ACTIVE'
+                 and position.deleted_at is null and position.permanently_deleted_at is null
+                join position_function_profile profile
+                  on profile.tenant_id = position.tenant_id
+                 and profile.position_id = position.id and profile.scope_type = 'GROUP'
+                join position_function_profile_version published
+                  on published.tenant_id = profile.tenant_id
+                 and published.profile_id = profile.id
+                 and published.lifecycle_status = 'PUBLISHED'
+                where assignment.tenant_id = :tenantId and assignment.id = :assignmentId
+                  and assignment.status = 'ACTIVE'
+                for update of assignment
+                """, base(principal).addValue("assignmentId", assignmentId));
+        if (assignments.size() != 1) {
+            throw new IllegalArgumentException("任职不存在、已停用或岗位方案尚未发布");
+        }
+        Map<String, Object> assignment = assignments.getFirst();
+        UUID orgUnitId = (UUID) assignment.get("org_unit_id");
+        UUID positionId = (UUID) assignment.get("position_id");
+        accessPolicy.requireOrgScope(orgUnitId);
+        String scopeType = String.valueOf(assignment.get("authorization_scope_type"));
+        Set<UUID> responsibleHotelIds = validateResponsibleHotels(
+                principal, positionId, scopeType, request.responsibleHotelIds(), null);
+        replaceAssignmentHotelScope(principal, assignmentId, responsibleHotelIds);
+        auditWriter.record("POSITION_ASSIGNMENT_HOTEL_SCOPE_UPDATED", "POSITION_ASSIGNMENT", assignmentId,
+                "{\"responsibleHotelCount\":" + responsibleHotelIds.size() + "}");
+        return Map.of("assignmentId", assignmentId,
+                "responsibleHotelIds", List.copyOf(responsibleHotelIds));
     }
 
     private TenantPrincipal prepare() {
@@ -1016,6 +1101,72 @@ public class OrganizationService {
     }
 
     private record PositionRoleGrant(UUID roleId, String scopeType) { }
+
+    private Set<UUID> validateResponsibleHotels(
+            TenantPrincipal principal,
+            UUID positionId,
+            String authorizationScopeType,
+            List<UUID> requestedHotelIds,
+            UUID defaultOrgUnitId
+    ) {
+        Set<UUID> hotelIds = requestedHotelIds == null
+                ? new java.util.LinkedHashSet<>()
+                : new java.util.LinkedHashSet<>(requestedHotelIds);
+        if (!"ASSIGNED_HOTELS".equals(authorizationScopeType)) {
+            if (!hotelIds.isEmpty()) {
+                throw new IllegalArgumentException("仅“指定负责门店”数据范围可以配置负责门店");
+            }
+            return hotelIds;
+        }
+        if (requestedHotelIds == null && defaultOrgUnitId != null) {
+            List<UUID> containingHotels = jdbc.queryForList("""
+                    select ancestor.id
+                    from org_unit_closure closure
+                    join org_unit ancestor
+                      on ancestor.tenant_id = closure.tenant_id
+                     and ancestor.id = closure.ancestor_id
+                     and ancestor.unit_type = 'HOTEL'
+                     and ancestor.status = 'ACTIVE'
+                    where closure.tenant_id = :tenantId
+                      and closure.descendant_id = :orgUnitId
+                    order by closure.depth
+                    limit 1
+                    """, base(principal).addValue("orgUnitId", defaultOrgUnitId), UUID.class);
+            hotelIds.addAll(containingHotels);
+        }
+        if (hotelIds.isEmpty()) {
+            throw new IllegalArgumentException("该岗位必须至少选择一家负责门店");
+        }
+        for (UUID hotelId : hotelIds) {
+            if (!"HOTEL".equals(requireOrgType(principal, hotelId))) {
+                throw new IllegalArgumentException("负责范围只能选择启用中的门店");
+            }
+            accessPolicy.requireOrgScope(hotelId);
+            requirePositionApplicableToOrganization(principal, positionId, hotelId);
+        }
+        return hotelIds;
+    }
+
+    private void replaceAssignmentHotelScope(
+            TenantPrincipal principal,
+            UUID assignmentId,
+            Set<UUID> hotelIds
+    ) {
+        MapSqlParameterSource parameters = base(principal)
+                .addValue("assignmentId", assignmentId)
+                .addValue("actorId", principal.actorId());
+        jdbc.update("""
+                delete from employee_assignment_hotel_scope
+                where tenant_id = :tenantId and assignment_id = :assignmentId
+                """, parameters);
+        for (UUID hotelId : hotelIds) {
+            jdbc.update("""
+                    insert into employee_assignment_hotel_scope
+                        (tenant_id, assignment_id, hotel_org_unit_id, created_by)
+                    values (:tenantId, :assignmentId, :hotelId, :actorId)
+                    """, parameters.addValue("hotelId", hotelId));
+        }
+    }
 
     private void requireUniqueCode(
             String table,

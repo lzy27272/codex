@@ -368,6 +368,57 @@ class PositionManagementIntegrationTest {
     }
 
     @Test
+    void assignedHotelScopePublishesAndIsolatesEachAssignmentToItsSelectedHotels() throws Exception {
+        JsonNode created = json(postJson("/api/v1/org/positions", """
+                {"name":"跨店运营范围测试岗位","appliesToAllHotels":true,"applicableHotelIds":[],
+                 "permissionCodes":["org.read"],"authorizationScopeType":"ASSIGNED_HOTELS",
+                 "wecomSelfSelectable":false}
+                """, 201));
+        UUID positionId = UUID.fromString(created.path("id").asText());
+
+        JsonNode published = json(postJson("/api/v1/org/positions/" + positionId + "/profile/publish", """
+                {"expectedProfileVersion":0,"expectedPositionVersion":0}
+                """, 200));
+        assertThat(published.path("authorizationScopeType").asText()).isEqualTo("ASSIGNED_HOTELS");
+
+        postJson("/api/v1/org/employees/" + FRONT_EMPLOYEE + "/assignments", """
+                {"orgUnitId":"%s","positionId":"%s","primary":false,
+                 "assignmentType":"PERMANENT","validFrom":"2026-09-01",
+                 "responsibleHotelIds":[]}
+                """.formatted(FRONT_DEPARTMENT, positionId), 400);
+
+        UUID assignmentId = UUID.fromString(json(postJson(
+                "/api/v1/org/employees/" + FRONT_EMPLOYEE + "/assignments", """
+                {"orgUnitId":"%s","positionId":"%s","primary":false,
+                 "assignmentType":"PERMANENT","validFrom":"2026-09-01",
+                 "responsibleHotelIds":["%s","%s"]}
+                """.formatted(FRONT_DEPARTMENT, positionId, HANGZHOU_HOTEL, SHANGHAI_HOTEL), 201))
+                .path("id").asText());
+        assertThat(jdbc.queryForObject("""
+                select scope_type = 'ASSIGNED_HOTELS' and scope_org_unit_id is null
+                from role_assignment
+                where tenant_id = ?::uuid and source_assignment_id = ?
+                """, Boolean.class, TENANT, assignmentId)).isTrue();
+        assertThat(jdbc.queryForObject("""
+                select count(*) from employee_assignment_hotel_scope
+                where tenant_id = ?::uuid and assignment_id = ?
+                """, Integer.class, TENANT, assignmentId)).isEqualTo(2);
+
+        putJson("/api/v1/org/assignments/" + assignmentId + "/hotel-scope", """
+                {"responsibleHotelIds":["%s"]}
+                """.formatted(HANGZHOU_HOTEL), 200);
+        MvcResult visibleUnits = getAsWithAssignment(
+                "/api/v1/org/units", FRONT_ACCOUNT, assignmentId.toString(), 200).andReturn();
+        assertThat(json(visibleUnits).findValuesAsText("id"))
+                .contains(HANGZHOU_HOTEL, FRONT_DEPARTMENT)
+                .doesNotContain(SHANGHAI_HOTEL);
+
+        getJson("/api/v1/org/employees", 200)
+                .andExpect(jsonPath("$[?(@.assignment_id == '%s')].responsible_hotel_names"
+                        .formatted(assignmentId)).value(org.hamcrest.Matchers.hasItem("杭州中心店")));
+    }
+
+    @Test
     void assignmentCreatesSourceGrantWithTheSameEffectiveDateWindow() throws Exception {
         JsonNode created = json(postJson("/api/v1/org/positions", """
                 {"name":"未来任职授权窗口岗位","appliesToAllHotels":true,"applicableHotelIds":[],

@@ -30,9 +30,9 @@ import java.util.UUID;
 @Service
 public class PositionManagementService {
     private static final Set<String> AUTHORIZATION_SCOPES =
-            Set.of("SELF", "ORG_UNIT", "ORG_TREE", "TENANT");
+            Set.of("SELF", "ORG_UNIT", "ORG_TREE", "ASSIGNED_HOTELS", "TENANT");
     private static final Map<String, Integer> SCOPE_RANK = Map.of(
-            "SELF", 0, "ORG_UNIT", 1, "ORG_TREE", 2, "TENANT", 3
+            "SELF", 0, "ORG_UNIT", 1, "ORG_TREE", 2, "ASSIGNED_HOTELS", 3, "TENANT", 4
     );
     private static final Set<String> PROTECTED_SYSTEM_POSITION_ROLES =
             Set.of("CEO", "PLATFORM_ADMIN", "HR_KPI_ADMIN");
@@ -706,6 +706,22 @@ public class PositionManagementService {
 
         if (hotelId == null) {
             replaceRolePermissions(principal, profile.defaultRoleId(), selected);
+            jdbc.update("""
+                    update role_assignment grant_record
+                    set scope_type = :scope,
+                        scope_org_unit_id = case
+                            when :scope in ('ORG_UNIT', 'ORG_TREE') then assignment.org_unit_id
+                            else null
+                        end
+                    from employee_position_assignment assignment
+                    where grant_record.tenant_id = :tenantId
+                      and assignment.tenant_id = grant_record.tenant_id
+                      and assignment.id = grant_record.source_assignment_id
+                      and grant_record.source_type = 'POSITION_ASSIGNMENT'
+                      and assignment.position_id = :positionId
+                    """, base(principal)
+                    .addValue("scope", draft.authorizationScopeType())
+                    .addValue("positionId", positionId));
             rebaseHotelProfiles(principal, positionId, draft.id(), draft.authorizationScopeType(),
                     draft.wecomSelfSelectable(), selected);
         }

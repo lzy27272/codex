@@ -12,7 +12,7 @@ type ProfileSummary = {
   status: string
   draftDirty?: boolean
   permissionCodes: string[]
-  authorizationScopeType?: 'SELF' | 'ORG_UNIT' | 'ORG_TREE' | 'TENANT'
+  authorizationScopeType?: 'SELF' | 'ORG_UNIT' | 'ORG_TREE' | 'ASSIGNED_HOTELS' | 'TENANT'
   wecomSelfSelectable?: boolean
 }
 export type PositionSummary = {
@@ -32,7 +32,7 @@ type PositionDraft = {
   applicableHotelIds: string[]
   copyFromPositionId: string
   permissionCodes: string[]
-  authorizationScopeType: 'SELF' | 'ORG_UNIT' | 'ORG_TREE' | 'TENANT'
+  authorizationScopeType: 'SELF' | 'ORG_UNIT' | 'ORG_TREE' | 'ASSIGNED_HOTELS' | 'TENANT'
   wecomSelfSelectable: boolean
 }
 
@@ -96,7 +96,7 @@ function PositionModal({ title, draft, hotels, positions, options, saving, confi
       <div className="form-grid">
         <label>岗位名称<input autoFocus value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} placeholder="例如 前厅接待" /></label>
         {configureProfile && <><label>功能方案来源<select value={draft.copyFromPositionId} onChange={(event) => copyProfile(event.target.value)}><option value="">基础空白方案</option>{positions.map((position) => <option key={position.id} value={position.id}>复制“{position.name}”</option>)}</select></label>
-        <label>数据范围<select value={draft.authorizationScopeType} onChange={(event) => onChange({ ...draft, authorizationScopeType: event.target.value as PositionDraft['authorizationScopeType'] })}><option value="SELF">仅本人</option><option value="ORG_UNIT">当前部门</option><option value="ORG_TREE">当前门店/组织树</option><option value="TENANT">集团全部范围</option></select></label></>}
+        <label>数据范围<select value={draft.authorizationScopeType} onChange={(event) => onChange({ ...draft, authorizationScopeType: event.target.value as PositionDraft['authorizationScopeType'] })}><option value="SELF">仅本人</option><option value="ORG_UNIT">当前部门</option><option value="ORG_TREE">当前门店/组织树</option><option value="ASSIGNED_HOTELS">指定负责门店（按任职配置）</option><option value="TENANT">集团全部范围</option></select></label></>}
         <label className="checkbox-label"><input type="checkbox" checked={draft.appliesToAllHotels} onChange={(event) => onChange({ ...draft, appliesToAllHotels: event.target.checked, applicableHotelIds: event.target.checked ? [] : draft.applicableHotelIds })} />适用于全部门店</label>
         {configureProfile && <label className="checkbox-label"><input type="checkbox" checked={draft.wecomSelfSelectable} onChange={(event) => onChange({ ...draft, wecomSelfSelectable: event.target.checked })} />允许企业微信新员工申请该岗位</label>}
       </div>
@@ -212,28 +212,39 @@ export function PositionAdministration({ identity, canManage, canPublish, hotels
         if (!window.confirm(`确认缩小“${editor.position!.name}”的适用门店？\n\n移除：${hotelNames}\n将暂停 ${impact.activeAssignmentCount ?? 0} 个有效任职、${impact.affectedRoleGrantCount ?? 0} 个岗位来源权限、${impact.affectedActiveBindingCount ?? 0} 个企业微信绑定，影响 ${impact.affectedEmployeeCount ?? 0} 名员工；群推送开关不变。`)) return
       }
     }
+    let createdId: string | undefined
     const done = editor.mode === 'create'
-      ? await run(() => apiRequest('/org/positions', identity, { method: 'POST', body: JSON.stringify({ ...body, copyFromPositionId: editor.draft.copyFromPositionId || null, permissionCodes: editor.draft.permissionCodes, authorizationScopeType: editor.draft.authorizationScopeType, wecomSelfSelectable: editor.draft.wecomSelfSelectable }) }), '岗位已创建，功能方案为草稿')
+      ? await run(async () => { const created = await apiRequest<PositionSummary>('/org/positions', identity, { method: 'POST', body: JSON.stringify({ ...body, copyFromPositionId: editor.draft.copyFromPositionId || null, permissionCodes: editor.draft.permissionCodes, authorizationScopeType: editor.draft.authorizationScopeType, wecomSelfSelectable: editor.draft.wecomSelfSelectable }) }); createdId = created.id }, '岗位已创建，功能方案为草稿；请检查后发布')
       : await run(() => apiRequest(`/org/positions/${editor.position!.id}`, identity, { method: 'PUT', body: JSON.stringify({ ...body, expectedVersion: editor.position!.rowVersion }) }), '岗位信息已更新')
-    if (done) setEditor(undefined)
+    if (done) { setEditor(undefined); if (createdId) setSelectedId(createdId) }
   }
   const saveProfile = () => selected && run(() => apiRequest(`/org/positions/${selected.id}/profile/draft`, identity, { method: 'PUT', body: JSON.stringify({ expectedProfileVersion: selected.profile.draftRowVersion ?? 0, permissionCodes: draftPermissions, authorizationScopeType: draftScope, wecomSelfSelectable: draftSelfSelectable }) }), '岗位功能草稿已保存')
   const publishProfile = async () => {
     if (!selected) return
     type PublishImpact = { affectedEmployeeCount?: number; addedPermissionCodes?: string[]; removedPermissionCodes?: string[]; blockedPermissionCodes?: string[] }
-    let impact: PublishImpact
-    setSaving(true); setError(undefined)
+    setSaving(true); setError(undefined); setNotice(undefined)
     try {
-      impact = await apiRequest<PublishImpact>(`/org/positions/${selected.id}/impact-preview`, identity, { method: 'POST', body: JSON.stringify({ operation: 'PUBLISH_PROFILE', permissionCodes: draftPermissions }) })
+      let expectedProfileVersion = selected.profile.draftRowVersion ?? 0
+      if (canManage) {
+        const saved = await apiRequest<ProfileSummary>(`/org/positions/${selected.id}/profile/draft`, identity, { method: 'PUT', body: JSON.stringify({ expectedProfileVersion, permissionCodes: draftPermissions, authorizationScopeType: draftScope, wecomSelfSelectable: draftSelfSelectable }) })
+        expectedProfileVersion = saved.draftRowVersion ?? expectedProfileVersion + 1
+      }
+      const impact = await apiRequest<PublishImpact>(`/org/positions/${selected.id}/impact-preview`, identity, { method: 'POST', body: JSON.stringify({ operation: 'PUBLISH_PROFILE', permissionCodes: draftPermissions }) })
+      if (impact.blockedPermissionCodes?.length) throw new Error(`包含受保护权限，不能发布：${impact.blockedPermissionCodes.join('、')}`)
+      const assignedHotelNotice = draftScope === 'ASSIGNED_HOTELS' ? '\n采用此范围后，每个任职必须单独配置负责门店；未配置时默认无门店数据权限。' : ''
+      if (!window.confirm(`确认发布“${selected.name}”功能方案？\n\n预计影响 ${impact.affectedEmployeeCount ?? selected.activeAssignmentCount} 名在职员工；权限将在重新读取身份后生效。${assignedHotelNotice}`)) {
+        setNotice(canManage ? '当前修改已保存为草稿，尚未发布' : undefined)
+        await reload()
+        return
+      }
+      await apiRequest(`/org/positions/${selected.id}/profile/publish`, identity, { method: 'POST', body: JSON.stringify({ expectedProfileVersion, expectedPositionVersion: selected.rowVersion }) })
+      setNotice('岗位功能方案已发布')
+      await reload()
     } catch (reason) {
       setError(reason instanceof Error ? `无法取得发布影响预览：${reason.message}` : '无法取得发布影响预览，已阻止本次发布')
-      return
     } finally {
       setSaving(false)
     }
-    if (impact.blockedPermissionCodes?.length) { setError(`包含受保护权限，不能发布：${impact.blockedPermissionCodes.join('、')}`); return }
-    if (!window.confirm(`确认发布“${selected.name}”功能方案？\n\n预计影响 ${impact.affectedEmployeeCount ?? selected.activeAssignmentCount} 名在职员工；权限将在重新读取身份后生效。`)) return
-    await run(() => apiRequest(`/org/positions/${selected.id}/profile/publish`, identity, { method: 'POST', body: JSON.stringify({ expectedProfileVersion: selected.profile.draftRowVersion ?? 0, expectedPositionVersion: selected.rowVersion }) }), '岗位功能方案已发布')
   }
   const deletePosition = async (position: PositionSummary) => {
     let impact: { rowVersion?: number; affectedEmployeeCount?: number; activeAssignmentCount?: number; affectedActiveBindingCount?: number; affectedRoleGrantCount?: number }
@@ -271,8 +282,8 @@ export function PositionAdministration({ identity, canManage, canPublish, hotels
       <header><div><span className="panel-kicker">POSITION ACCESS</span><h2>岗位与功能配置</h2></div>{canManage && <div className="panel-actions"><button className="secondary" onClick={() => setView(view === 'active' ? 'deleted' : 'active')}>{view === 'active' ? `已删除（${deleted.length}）` : '返回岗位列表'}</button>{view === 'active' && <button className="primary" onClick={() => setEditor({ mode: 'create', draft: emptyDraft })}>＋ 新建岗位</button>}</div>}</header>
       <div className="position-admin-layout">
         <aside className="position-list"><label>搜索岗位<input placeholder="输入岗位名称" onChange={(event) => { const match = source.find((item) => item.name.includes(event.target.value.trim())); if (match) setSelectedId(match.id) }} /></label>{source.length ? source.map((position) => <button className={selected?.id === position.id ? 'active' : ''} key={position.id} onClick={() => setSelectedId(position.id)}><span><strong>{position.name}</strong><small>{position.activeAssignmentCount} 名在职员工</small></span><b>{profileVersionLabel(position.profile)}</b></button>) : <div className="position-empty">“已删除”中暂无岗位</div>}</aside>
-        {selected ? <section className="position-profile-panel"><header><div><h3>{selected.name} · {view === 'active' ? '功能方案' : '已删除岗位'}</h3><p>{selected.appliesToAllHotels ? '集团标准，适用于全部门店' : `适用于 ${selected.applicableHotels.length} 家门店`}</p></div>{canManage && <div className="panel-actions">{view === 'active' ? <><button className="secondary" onClick={() => setEditor({ mode: 'edit', position: selected, draft: { name: selected.name, appliesToAllHotels: selected.appliesToAllHotels, applicableHotelIds: selected.applicableHotels.map((hotel) => hotel.id), copyFromPositionId: '', permissionCodes: selected.profile.permissionCodes, authorizationScopeType: selected.profile.authorizationScopeType ?? 'SELF', wecomSelfSelectable: selected.profile.wecomSelfSelectable ?? false } })}>编辑岗位</button><button className="secondary danger-action" onClick={() => void deletePosition(selected)}>删除</button></> : <><button className="secondary" onClick={() => void restorePosition(selected)}>恢复</button><button className="secondary danger-action" onClick={() => void permanentlyDelete(selected)}>永久删除</button></>}</div>}</header>
-          {view === 'active' && <><div className="position-profile-controls"><label>数据范围<select value={draftScope} disabled={!canManage} onChange={(event) => setDraftScope(event.target.value as PositionDraft['authorizationScopeType'])}><option value="SELF">仅本人</option><option value="ORG_UNIT">当前部门</option><option value="ORG_TREE">当前门店/组织树</option><option value="TENANT">集团全部范围</option></select></label><label className="checkbox-label"><input type="checkbox" checked={draftSelfSelectable} disabled={!canManage} onChange={(event) => setDraftSelfSelectable(event.target.checked)} />允许企微新员工申请</label></div>
+        {selected ? <section className="position-profile-panel"><header><div><h3>{selected.name} · {view === 'active' ? '功能方案' : '已删除岗位'}</h3><p>{selected.appliesToAllHotels ? '集团标准，适用于全部门店' : `适用于 ${selected.applicableHotels.length} 家门店`}</p></div><div className="panel-actions">{view === 'active' && canPublish && <button className="primary" disabled={saving} onClick={() => void publishProfile()}>{saving ? '处理中…' : '发布当前草稿'}</button>}{canManage && (view === 'active' ? <><button className="secondary" onClick={() => setEditor({ mode: 'edit', position: selected, draft: { name: selected.name, appliesToAllHotels: selected.appliesToAllHotels, applicableHotelIds: selected.applicableHotels.map((hotel) => hotel.id), copyFromPositionId: '', permissionCodes: selected.profile.permissionCodes, authorizationScopeType: selected.profile.authorizationScopeType ?? 'SELF', wecomSelfSelectable: selected.profile.wecomSelfSelectable ?? false } })}>编辑岗位</button><button className="secondary danger-action" onClick={() => void deletePosition(selected)}>删除</button></> : <><button className="secondary" onClick={() => void restorePosition(selected)}>恢复</button><button className="secondary danger-action" onClick={() => void permanentlyDelete(selected)}>永久删除</button></>)}</div></header>
+          {view === 'active' && <><div className="position-profile-controls"><label>数据范围<select value={draftScope} disabled={!canManage} onChange={(event) => setDraftScope(event.target.value as PositionDraft['authorizationScopeType'])}><option value="SELF">仅本人</option><option value="ORG_UNIT">当前部门</option><option value="ORG_TREE">当前门店/组织树</option><option value="ASSIGNED_HOTELS">指定负责门店（按任职配置）</option><option value="TENANT">集团全部范围</option></select></label><label className="checkbox-label"><input type="checkbox" checked={draftSelfSelectable} disabled={!canManage} onChange={(event) => setDraftSelfSelectable(event.target.checked)} />允许企微新员工申请</label>{draftScope === 'ASSIGNED_HOTELS' && <small>具体门店在“人员与任职”中按员工分别配置。</small>}</div>
             <div className="position-permission-table position-module-table"><div className="position-permission-head"><span>员工端可见模块</span><span>可见</span><span>说明</span></div>{moduleOptions.map((option) => <label key={option.permissionCode}><span><strong>{option.label}</strong><small>菜单模块</small></span><input type="checkbox" disabled={!canManage} checked={draftPermissions.includes(option.permissionCode)} onChange={(event) => setDraftPermissions(event.target.checked ? [...draftPermissions, option.permissionCode] : draftPermissions.filter((code) => code !== option.permissionCode))} /><span>只控制菜单；操作仍需下方权限</span></label>)}</div>
             <div className="position-permission-table"><div className="position-permission-head"><span>页面内操作权限</span><span>允许</span><span>权限代码</span></div>{actionOptions.map((option) => <label className={!option.delegable ? 'protected' : ''} key={option.permissionCode}><span><strong>{option.label}</strong><small>{option.category}</small></span><input type="checkbox" disabled={!canManage || !option.delegable} checked={draftPermissions.includes(option.permissionCode)} onChange={(event) => setDraftPermissions(event.target.checked ? [...draftPermissions, option.permissionCode] : draftPermissions.filter((code) => code !== option.permissionCode))} /><span>{option.delegable ? option.permissionCode : '受保护权限，不可下放'}</span></label>)}</div>{(canManage || canPublish) && <footer><span>预计影响 <strong>{selected.activeAssignmentCount}</strong> 名在职员工</span>{canManage && <button className="secondary" disabled={saving} onClick={() => void saveProfile()}>保存草稿</button>}{canPublish && <button className="primary" disabled={saving} onClick={() => void publishProfile()}>提交发布</button>}</footer>}</>}
           {view === 'deleted' && <div className="recycle-bin-note"><strong>岗位已从可选列表隐藏。</strong><span>恢复后可选择是否恢复原任职；再次删除将永久从管理界面消失。</span></div>}

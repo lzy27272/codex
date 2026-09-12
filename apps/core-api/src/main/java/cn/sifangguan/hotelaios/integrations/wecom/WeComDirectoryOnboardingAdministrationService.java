@@ -516,6 +516,26 @@ public class WeComDirectoryOnboardingAdministrationService {
                 values (:roleAssignmentId, :tenantId, :accountId, :roleId, :scopeOrgUnitId,
                         :scopeType, now(), :actorId, 'POSITION_ASSIGNMENT', :assignmentId)
                 """, identity);
+        if ("ASSIGNED_HOTELS".equals(grant.scopeType())) {
+            int insertedScope = jdbc.update("""
+                    insert into employee_assignment_hotel_scope
+                        (tenant_id, assignment_id, hotel_org_unit_id, created_by)
+                    select :tenantId, :assignmentId, ancestor.id, :actorId
+                    from org_unit_closure closure
+                    join org_unit ancestor
+                      on ancestor.tenant_id = closure.tenant_id
+                     and ancestor.id = closure.ancestor_id
+                     and ancestor.unit_type = 'HOTEL'
+                     and ancestor.status = 'ACTIVE'
+                    where closure.tenant_id = :tenantId
+                      and closure.descendant_id = :orgUnitId
+                    order by closure.depth
+                    limit 1
+                    """, identity);
+            if (insertedScope != 1) {
+                throw new IllegalArgumentException("申请部门没有可用的所属门店，不能配置指定负责门店范围");
+            }
+        }
         if (sourceIdentity != null) {
             if (transfer != null) revokeTransferredBinding(principal, transfer);
             int rebound = jdbc.update("""

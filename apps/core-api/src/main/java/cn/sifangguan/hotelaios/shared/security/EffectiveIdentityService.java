@@ -247,7 +247,7 @@ public class EffectiveIdentityService {
         Set<UUID> treeRoots = new LinkedHashSet<>();
         for (RoleGrant grant : grants) {
             roles.add(identityRoleCode(grant.roleCode(), grant.roleType()));
-            tenantScope = applyGrantScope(grant, directScopes, treeRoots, tenantScope);
+            tenantScope = applyGrantScope(tenantId, grant, directScopes, treeRoots, tenantScope);
         }
 
         Set<UUID> roleIds = new LinkedHashSet<>();
@@ -301,7 +301,8 @@ public class EffectiveIdentityService {
                     order by permission.code
                     """, new MapSqlParameterSource("tenantId", tenantId)
                     .addValue("versionId", selected.effectiveVersionId()), String.class));
-            tenantScope = applyProfileScope(selected.authorizationScopeType(), selected.orgUnitId(),
+            tenantScope = applyProfileScope(tenantId, selected.authorizationScopeType(),
+                    selected.assignmentId(), selected.orgUnitId(),
                     directScopes, treeRoots);
         } else {
             permissions = new LinkedHashSet<>(jdbc.queryForList("""
@@ -321,7 +322,7 @@ public class EffectiveIdentityService {
                 directScopes.add(selected.orgUnitId());
             } else {
                 for (RoleGrant grant : matchingGrants) {
-                    tenantScope = applyGrantScope(grant, directScopes, treeRoots, tenantScope);
+                    tenantScope = applyGrantScope(tenantId, grant, directScopes, treeRoots, tenantScope);
                     if ("SELF".equals(grant.scopeType())) directScopes.add(selected.orgUnitId());
                 }
             }
@@ -333,7 +334,7 @@ public class EffectiveIdentityService {
             if (!grant.systemRole() || !SUPPLEMENTAL_ACCOUNT_ROLES.contains(grant.roleCode())) continue;
             roles.add(identityRoleCode(grant.roleCode(), grant.roleType()));
             permissions.addAll(rolePermissions(tenantId, grant.roleId()));
-            tenantScope = applyGrantScope(grant, directScopes, treeRoots, tenantScope);
+            tenantScope = applyGrantScope(tenantId, grant, directScopes, treeRoots, tenantScope);
         }
         Set<UUID> scopes = expandScopes(tenantId, directScopes, treeRoots);
         return new TenantPrincipal(
@@ -381,7 +382,7 @@ public class EffectiveIdentityService {
             return false;
         }
         return switch (grant.scopeType()) {
-            case "TENANT", "SELF" -> true;
+            case "TENANT", "SELF", "ASSIGNED_HOTELS" -> true;
             case "ORG_UNIT" -> grant.scopeOrgUnitId() != null
                     && grant.scopeOrgUnitId().equals(assignment.orgUnitId());
             case "ORG_TREE" -> grant.scopeOrgUnitId() != null
@@ -415,6 +416,7 @@ public class EffectiveIdentityService {
     }
 
     private boolean applyGrantScope(
+            UUID tenantId,
             RoleGrant grant,
             Set<UUID> directScopes,
             Set<UUID> treeRoots,
@@ -430,13 +432,19 @@ public class EffectiveIdentityService {
                 addIfPresent(directScopes, grant.scopeOrgUnitId());
                 yield tenantScope;
             }
+            case "ASSIGNED_HOTELS" -> {
+                addAssignedHotelScopes(tenantId, grant.sourceAssignmentId(), treeRoots);
+                yield tenantScope;
+            }
             case "SELF" -> tenantScope;
             default -> throw new IdentityAuthenticationException("账号存在不支持的数据范围类型");
         };
     }
 
     private boolean applyProfileScope(
+            UUID tenantId,
             String scopeType,
+            UUID assignmentId,
             UUID assignmentOrgUnitId,
             Set<UUID> directScopes,
             Set<UUID> treeRoots
@@ -447,12 +455,32 @@ public class EffectiveIdentityService {
                 treeRoots.add(assignmentOrgUnitId);
                 yield false;
             }
+            case "ASSIGNED_HOTELS" -> {
+                addAssignedHotelScopes(tenantId, assignmentId, treeRoots);
+                yield false;
+            }
             case "SELF", "ORG_UNIT" -> {
                 directScopes.add(assignmentOrgUnitId);
                 yield false;
             }
             default -> throw new IdentityAuthenticationException("岗位方案存在不支持的数据范围类型");
         };
+    }
+
+    private void addAssignedHotelScopes(UUID tenantId, UUID assignmentId, Set<UUID> treeRoots) {
+        if (assignmentId == null) return;
+        treeRoots.addAll(jdbc.queryForList("""
+                select scope.hotel_org_unit_id
+                from employee_assignment_hotel_scope scope
+                join org_unit hotel
+                  on hotel.tenant_id = scope.tenant_id
+                 and hotel.id = scope.hotel_org_unit_id
+                 and hotel.unit_type = 'HOTEL'
+                 and hotel.status = 'ACTIVE'
+                where scope.tenant_id = :tenantId and scope.assignment_id = :assignmentId
+                order by hotel.name, hotel.id
+                """, new MapSqlParameterSource("tenantId", tenantId)
+                .addValue("assignmentId", assignmentId), UUID.class));
     }
 
     private Set<UUID> expandScopes(UUID tenantId, Set<UUID> directScopes, Set<UUID> treeRoots) {
